@@ -1,0 +1,11 @@
+.dart_tool/
+.fvm/
+.packages
+.pub/
+build/
+coverage/
+.idea/
+*.iml
+.DS_Store
+pubspec.lock
+.fvmrc

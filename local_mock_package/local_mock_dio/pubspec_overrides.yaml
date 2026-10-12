@@ -1,0 +1,4 @@
+# Local development only (excluded from publishing via .pubignore).
+dependency_overrides:
+  local_mock_core:
+    path: ../local_mock_core
