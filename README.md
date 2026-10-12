@@ -72,6 +72,22 @@ Flutter 调试期接口 Mock 工具。桌面端通过 Dart VM Service 把 Mock �
 
 字段说明见 [`local_mock_core`](local_mock_package/local_mock_core/README.md#规则字段)。
 
+### 用 AI 生成规则
+
+仓库提供了 Agent Skill [`skills/local-mock-rules`](skills/local-mock-rules/SKILL.md)。它会根据业务代码中的接口定义和模型类生成规则，并用 `scripts/validate_rules.py` 校验格式。需要安装到业务 App 仓库或全局后使用：
+
+```bash
+# pi：作为 package 安装（自动发现 skills/ 目录），-l 表示只装到当前项目
+pi install git:github.com/Dabbit-Chan/local_mock
+pi install -l git:github.com/Dabbit-Chan/local_mock
+
+# 其他支持 Agent Skills 的工具：复制到业务仓库或全局 skills 目录
+git clone --depth 1 https://github.com/Dabbit-Chan/local_mock.git /tmp/local_mock
+cp -R /tmp/local_mock/skills/local-mock-rules <业务仓库>/.agents/skills/   # 或 ~/.agents/skills/
+```
+
+不同工具的 skills 目录不同（如 Claude Code 为 `.claude/skills/`），按所用工具的约定放置即可。
+
 ## 注意事项
 
 - VM Service 地址带有鉴权 token，等同于 App 的调试权限，不要分享给他人。桌面端只保存规则草稿，不保存地址。
