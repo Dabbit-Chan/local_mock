@@ -473,7 +473,6 @@ class _TrafficDetailDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final requestBody = entry['requestBody'] as String?;
     final responseBody = entry['responseBody'] as String?;
 
@@ -505,15 +504,6 @@ class _TrafficDetailDialog extends StatelessWidget {
               if (responseBody != null) ...[
                 const SizedBox(height: 8),
                 _Block(title: '响应体', text: prettyTrafficBody(responseBody)),
-              ],
-              if (entry['truncated'] == true) ...[
-                const SizedBox(height: 8),
-                Text(
-                  '内容过长，已截断显示。',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
               ],
             ],
           ),

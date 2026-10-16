@@ -56,16 +56,15 @@ void main() {
     expect(recording.method, 'GET');
   });
 
-  test('long bodies are clipped and flagged as truncated', () {
-    final long = 'x' * (TrafficRecorder.maxBodyChars + 10);
+  test('long bodies are kept in full', () {
+    final long = 'x' * (100 * 1024);
     recorder.begin('POST', Uri.parse('https://a.test/x'))
       ..collectRequestText(long)
       ..finish(statusCode: 200, body: long);
 
     final entry = recorder.since(0).single;
-    expect(entry.requestBody, hasLength(TrafficRecorder.maxBodyChars));
-    expect(entry.responseBody, hasLength(TrafficRecorder.maxBodyChars));
-    expect(entry.truncated, isTrue);
+    expect(entry.requestBody, long);
+    expect(entry.responseBody, long);
   });
 
   test('request body from collected bytes is decoded', () {
@@ -76,14 +75,14 @@ void main() {
     expect(recorder.since(0).single.requestBody, '{"k":"v"}');
   });
 
-  test('caps entries and only returns entries after the cursor', () {
-    for (var i = 0; i < TrafficRecorder.maxEntries + 10; i++) {
+  test('returns only entries after the cursor', () {
+    for (var i = 0; i < 30; i++) {
       recorder
           .begin('GET', Uri.parse('https://a.test/$i'))
           .finish(statusCode: 200);
     }
 
-    expect(recorder.since(0), hasLength(TrafficRecorder.maxEntries));
+    expect(recorder.since(0), hasLength(30));
     expect(recorder.since(recorder.revision), isEmpty);
     final middle = recorder.since(recorder.revision - 3);
     expect(middle, hasLength(3));

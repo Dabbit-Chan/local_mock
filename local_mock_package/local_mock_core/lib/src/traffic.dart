@@ -17,7 +17,6 @@ final class TrafficEntry {
     this.statusCode,
     this.contentType,
     this.responseBody,
-    this.truncated = false,
     this.error,
   });
 
@@ -34,7 +33,6 @@ final class TrafficEntry {
     statusCode: json['statusCode'] as int?,
     contentType: json['contentType'] as String?,
     responseBody: json['responseBody'] as String?,
-    truncated: json['truncated'] as bool? ?? false,
     error: json['error'] as String?,
   );
 
@@ -65,9 +63,6 @@ final class TrafficEntry {
   /// Response body as text; binary payloads become a size placeholder.
   final String? responseBody;
 
-  /// Any recorded body was clipped to the size cap.
-  final bool truncated;
-
   /// Error description for requests that never produced a response.
   final String? error;
 
@@ -84,22 +79,12 @@ final class TrafficEntry {
     if (statusCode != null) 'statusCode': statusCode,
     if (contentType != null) 'contentType': contentType,
     if (responseBody != null) 'responseBody': responseBody,
-    if (truncated) 'truncated': truncated,
     if (error != null) 'error': error,
   };
 }
 
 /// Debug-only in-memory capture buffer, one per isolate.
 final class TrafficRecorder {
-  /// Kept entries; older ones are dropped first.
-  static const maxEntries = 100;
-
-  /// Cap for recorded request/response body text (characters).
-  static const maxBodyChars = 64 * 1024;
-
-  /// Cap for accumulated request bytes before text conversion.
-  static const maxBodyBytes = 64 * 1024;
-
   final List<TrafficEntry> _entries = [];
   int _counter = 0;
 
@@ -121,9 +106,6 @@ final class TrafficRecorder {
 
   void _finish(TrafficEntry Function(int revision) build) {
     _entries.add(build(++_counter));
-    if (_entries.length > maxEntries) {
-      _entries.removeRange(0, _entries.length - maxEntries);
-    }
   }
 }
 
@@ -142,43 +124,22 @@ final class TrafficRecording {
   final BytesBuilder _requestBytes = BytesBuilder(copy: false);
   final StringBuffer _requestText = StringBuffer();
   String? _requestBody;
-  bool _truncated = false;
   bool _finalized = false;
 
   /// Sets the request body text directly (e.g. Dio's decoded options.data).
   set requestBody(String? text) {
     if (text == null || text.isEmpty) return;
-    if (text.length > TrafficRecorder.maxBodyChars) {
-      _truncated = true;
-      text = text.substring(0, TrafficRecorder.maxBodyChars);
-    }
     _requestBody = text;
   }
 
   /// Collects request body text incrementally (dart:io write* methods).
   void collectRequestText(String text) {
-    final buffer = _requestText;
-    if (buffer.length >= TrafficRecorder.maxBodyChars) {
-      _truncated = true;
-      return;
-    }
-    if (text.length + buffer.length > TrafficRecorder.maxBodyChars) {
-      _truncated = true;
-      text = text.substring(0, TrafficRecorder.maxBodyChars - buffer.length);
-    }
-    buffer.write(text);
+    _requestText.write(text);
   }
 
   /// Collects raw request body chunks (dart:io add / addStream).
   void collectRequestBytes(List<int> bytes) {
-    if (_requestBytes.length >= TrafficRecorder.maxBodyBytes) {
-      _truncated = true;
-      return;
-    }
     _requestBytes.add(bytes);
-    if (_requestBytes.length > TrafficRecorder.maxBodyBytes) {
-      _truncated = true;
-    }
   }
 
   /// Records a completed response (mocked or from the network).
@@ -187,12 +148,7 @@ final class TrafficRecording {
     int? statusCode,
     String? contentType,
     String? body,
-    bool truncated = false,
   }) {
-    if (body != null && body.length > TrafficRecorder.maxBodyChars) {
-      truncated = true;
-      body = body.substring(0, TrafficRecorder.maxBodyChars);
-    }
     _complete(
       (revision) => TrafficEntry(
         revision: revision,
@@ -206,8 +162,7 @@ final class TrafficRecording {
         requestBody: _resolveRequestBody(),
         statusCode: statusCode,
         contentType: contentType,
-        responseBody: _clip(body),
-        truncated: truncated || _truncated,
+        responseBody: body,
       ),
     );
   }
@@ -225,8 +180,7 @@ final class TrafficRecording {
         host: uri.host.isEmpty ? null : uri.host,
         path: uri.path,
         requestBody: _resolveRequestBody(),
-        truncated: _truncated,
-        error: _clip(error.toString()),
+        error: error.toString(),
       ),
     );
   }
@@ -242,16 +196,9 @@ final class TrafficRecording {
     final text =
         _requestBody ??
         (_requestText.isNotEmpty ? _requestText.toString() : null);
-    if (text != null) return _clip(text);
+    if (text != null) return text;
     final bytes = _requestBytes.takeBytes();
     if (bytes.isEmpty) return null;
-    return _clip(utf8.decode(bytes, allowMalformed: true));
-  }
-
-  static String? _clip(String? text) {
-    if (text == null || text.length <= TrafficRecorder.maxBodyChars) {
-      return text;
-    }
-    return text.substring(0, TrafficRecorder.maxBodyChars);
+    return utf8.decode(bytes, allowMalformed: true);
   }
 }

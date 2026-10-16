@@ -73,7 +73,7 @@ LocalMock.debugClearTraffic();
 ## 抓包行为
 
 - 每条记录包含：方法、完整 URI、host、path、请求体（尽力而为）、状态码、耗时、响应体文本、是否 Mock、错误信息。
-- 缓冲区为 isolate 内环形队列，最多保留 `TrafficRecorder.maxEntries`（100）条；请求/响应体超过 `maxBodyChars`（64KB）会截断并标记 `truncated`。
+- 缓冲区为 isolate 内队列，不限制保留条数；请求/响应体完整记录，不截断。
 - 二进制响应体不记录内容，只记录大小占位符（由适配器处理）。
 
 ## VM Service 协议

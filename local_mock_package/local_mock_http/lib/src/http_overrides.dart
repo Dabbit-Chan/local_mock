@@ -659,17 +659,12 @@ final class _RecordingHttpClientResponse extends StreamView<List<int>>
     late final StreamSubscription<List<int>> subscription;
     final controller = StreamController<List<int>>(sync: true);
     final received = BytesBuilder(copy: false);
-    var capped = false;
     var settled = false;
 
     controller.onListen = () {
       subscription = inner.listen(
         (chunk) {
-          if (received.length < TrafficRecorder.maxBodyBytes) {
-            received.add(chunk);
-          } else {
-            capped = true;
-          }
+          received.add(chunk);
           controller.add(chunk);
         },
         onError: (Object error, StackTrace stackTrace) {
@@ -683,7 +678,6 @@ final class _RecordingHttpClientResponse extends StreamView<List<int>>
             statusCode: inner.statusCode,
             contentType: inner.headers.value(HttpHeaders.contentTypeHeader),
             body: _describeBody(inner.headers.contentType, received.toBytes()),
-            truncated: capped,
           );
           controller.close();
         },
