@@ -50,6 +50,14 @@ void main() {
 - 支持 `abort()` 和 `close(force: true)`（Dio 4 的取消方式）。
 - Mock 响应不支持重定向，`detachSocket()` 永不完成。
 
+## 抓包
+
+所有经过该 overrides 创建的 `HttpClient` 的请求（Mock 命中与未命中走网络的）都会被记录，供桌面端“抓包”页实时展示、一键生成规则：
+
+- 未命中规则的请求由包装层透传字节并记录：请求体收集原始字节，响应体在流结束时按 content-type 转为文本；二进制响应只记录大小占位符。
+- 记录不影响请求本身的行为；仅 Debug 模式生效。
+- 需要将桌面端同步升级到 0.2.0+（协议 v2）。
+
 ## 与 local_mock_dio 一起使用
 
 Dio 使用默认适配器时，两个包都会生效，`local_mock_dio` 的拦截器先命中。只用 Dio 的项目建议接入 `local_mock_dio`，可以保留 Dio 的拦截器链和 `response.extra` 标记。

@@ -1,6 +1,7 @@
 // Runs against both Dio 4 and Dio 5; see README for switching versions.
 // ignore_for_file: deprecated_member_use
 
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -25,6 +26,19 @@ class CountingAdapter implements HttpClientAdapter {
       },
     );
   }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+/// Fails before any response exists, like a connection error.
+class _FailingAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<dynamic>? cancelFuture,
+  ) async => throw StateError('socket closed');
 
   @override
   void close({bool force = false}) {}
@@ -56,6 +70,7 @@ void main() {
 
   tearDown(() {
     LocalMock.debugClear();
+    LocalMock.debugClearTraffic();
     dio.close(force: true);
   });
 
@@ -208,6 +223,43 @@ void main() {
     LocalMock.debugClear();
     await dio.get<dynamic>('/api/profile');
     expect(adapter.calls, 1);
+  });
+
+  test('records mocked and pass-through traffic', () async {
+    replace();
+    await dio.get<dynamic>('/api/profile');
+    await dio.post<dynamic>('/api/other', data: {'k': 'v'});
+
+    final entries = LocalMock.debugTrafficEntries();
+    expect(entries, hasLength(2));
+
+    final mocked = entries.first;
+    expect(mocked.mocked, isTrue);
+    expect(mocked.method, 'GET');
+    expect(mocked.path, '/api/profile');
+    expect(mocked.statusCode, 200);
+    expect(mocked.contentType, contains('json'));
+    expect(jsonDecode(mocked.responseBody!), {'name': 'mock'});
+    expect(mocked.requestBody, isNull);
+
+    final real = entries.last;
+    expect(real.mocked, isFalse);
+    expect(real.method, 'POST');
+    expect(real.path, '/api/other');
+    expect(real.statusCode, 200);
+    expect(jsonDecode(real.responseBody!), {'source': 'backend'});
+    expect(jsonDecode(real.requestBody!), {'k': 'v'});
+  });
+
+  test('records network failures without a status code', () async {
+    dio.httpClientAdapter = _FailingAdapter();
+    await expectLater(dio.get<dynamic>('/api/down'), throwsA(isA<DioError>()));
+
+    final entry = LocalMock.debugTrafficEntries().single;
+    expect(entry.mocked, isFalse);
+    expect(entry.statusCode, isNull);
+    expect(entry.responseBody, isNull);
+    expect(entry.error, isNotEmpty);
   });
 
   test('public attachment is idempotent for a Dio instance', () {

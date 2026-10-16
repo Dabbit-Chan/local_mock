@@ -73,7 +73,56 @@ void main() {
   tearDownAll(() => server.close(force: true));
 
   setUp(() => backendCalls = 0);
-  tearDown(LocalMock.debugClear);
+  tearDown(() {
+    LocalMock.debugClear();
+    LocalMock.debugClearTraffic();
+  });
+
+  test('records mocked and pass-through traffic', () async {
+    replace();
+    final client = createClient();
+    await send(client, 'GET', '/api/profile');
+    await send(client, 'POST', '/api/other', body: '{"x":1}');
+
+    final entries = LocalMock.debugTrafficEntries();
+    expect(entries, hasLength(2));
+
+    final mocked = entries.first;
+    expect(mocked.mocked, isTrue);
+    expect(mocked.method, 'GET');
+    expect(mocked.path, '/api/profile');
+    expect(mocked.statusCode, 200);
+    expect(jsonDecode(mocked.responseBody!), {'name': 'mock'});
+    expect(mocked.requestBody, isNull);
+
+    final real = entries.last;
+    expect(real.mocked, isFalse);
+    expect(real.method, 'POST');
+    expect(real.path, '/api/other');
+    expect(real.host, server.address.host);
+    expect(real.statusCode, 200);
+    expect(real.contentType, contains('json'));
+    expect(jsonDecode(real.responseBody!), {'source': 'backend'});
+    expect(real.requestBody, '{"x":1}');
+    client.close();
+  });
+
+  test('records aborted mock requests as failed entries', () async {
+    replace(delayMs: 1000);
+    final client = createClient();
+    final request = await client.getUrl(base.resolve('/api/profile'));
+    final expectation = expectLater(request.close(), throwsA(anything));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    request.abort();
+    await expectation;
+
+    final entry = LocalMock.debugTrafficEntries().single;
+    expect(entry.mocked, isTrue);
+    expect(entry.statusCode, isNull);
+    expect(entry.responseBody, isNull);
+    expect(entry.error, contains('aborted'));
+    client.close();
+  });
 
   test('matched request is answered locally with status and headers', () async {
     replace(statusCode: 201, headers: {'X-Debug-Mock': 'true'});

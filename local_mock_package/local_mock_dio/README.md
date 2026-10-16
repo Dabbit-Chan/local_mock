@@ -44,6 +44,14 @@ LocalMockDio.attach(dio);                // 再挂 local_mock
 - `delayMs` 期间支持 `CancelToken` 取消。
 - 只支持 `ResponseType.json`，其他类型命中规则时会返回错误。
 
+## 抓包
+
+经过该拦截器的所有请求（Mock 命中与未命中走网络的）都会被记录到 isolate 内的抓包缓冲，供桌面端“抓包”页实时展示、一键生成规则：
+
+- 未命中规则的请求在 `onResponse` / `onError` 里记录真实结果；被后续拦截器提前 resolve 的请求不记录。
+- 请求体：`String` / JSON 可编码对象直接记录；`FormData` 只记录字段与文件数量。
+- 仅 Debug 模式生效；需要将桌面端同步升级到 0.2.0+（协议 v2）。
+
 ## 测试
 
 ```bash

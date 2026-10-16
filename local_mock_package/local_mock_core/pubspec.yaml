@@ -1,6 +1,6 @@
 name: local_mock_core
 description: HTTP-client-agnostic core of local_mock. Debug-only mock rules controlled through Dart VM Service extensions.
-version: 0.1.0
+version: 0.2.0
 
 environment:
   sdk: '>=3.8.0 <4.0.0'

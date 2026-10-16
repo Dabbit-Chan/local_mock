@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:local_mock_core/local_mock_core.dart';
 
 /// Wraps every `HttpClient` created through `dart:io` so matching requests
 /// are answered locally. Unmatched requests use [previous] (or the default
-/// client) unchanged.
+/// client) unchanged. Both mocked and pass-through requests are recorded
+/// for the desktop capture view.
 final class LocalMockHttpOverrides extends HttpOverrides {
   LocalMockHttpOverrides([this.previous]);
 
@@ -33,10 +35,18 @@ final class _MockHttpClient implements HttpClient {
 
   @override
   Future<HttpClientRequest> openUrl(String method, Uri url) {
+    final traffic = LocalMock.beginTraffic(method, url);
     final rule = LocalMock.match(method, url);
-    if (rule == null) return _inner.openUrl(method, url);
+    if (rule == null) {
+      final opening = _inner.openUrl(method, url);
+      if (traffic == null) return opening;
+      return opening.then(
+        (request) => _RecordingHttpClientRequest(traffic, request),
+        onError: (error, stackTrace) => _failOpen(traffic, error, stackTrace),
+      );
+    }
     if (_closed) throw StateError('Client is closed');
-    final request = _MockRequest(method, url, rule, _pending.remove);
+    final request = _MockRequest(method, url, rule, _pending.remove, traffic);
     _pending.add(request);
     return Future.value(request);
   }
@@ -58,9 +68,24 @@ final class _MockHttpClient implements HttpClient {
       query: reference.hasQuery ? reference.query : null,
     );
     if (LocalMock.match(method, url) == null) {
-      return _inner.open(method, host, port, path);
+      final traffic = LocalMock.beginTraffic(method, url);
+      final opening = _inner.open(method, host, port, path);
+      if (traffic == null) return opening;
+      return opening.then(
+        (request) => _RecordingHttpClientRequest(traffic, request),
+        onError: (error, stackTrace) => _failOpen(traffic, error, stackTrace),
+      );
     }
     return openUrl(method, url);
+  }
+
+  static Never _failOpen(
+    TrafficRecording traffic,
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    traffic.fail(error);
+    Error.throwWithStackTrace(error, stackTrace);
   }
 
   @override
@@ -170,15 +195,23 @@ final class _MockHttpClient implements HttpClient {
   set keyLog(Function(String line)? callback) => _inner.keyLog = callback;
 }
 
-/// Request body is accepted and discarded. The rule delay starts at [close],
-/// so client receive timeouts behave like a slow server.
+/// Request body is collected for the capture view, then discarded. The rule
+/// delay starts at [close], so client receive timeouts behave like a slow
+/// server.
 final class _MockRequest implements HttpClientRequest {
-  _MockRequest(this.method, this.uri, this._rule, this._onFinish) {
+  _MockRequest(
+    this.method,
+    this.uri,
+    this._rule,
+    this._onFinish,
+    this._traffic,
+  ) {
     // Abort without a listener must not become an uncaught zone error.
     _done.future.ignore();
   }
 
   final MockRule _rule;
+  final TrafficRecording? _traffic;
   final void Function(_MockRequest) _onFinish;
   final _done = Completer<HttpClientResponse>();
   Timer? _timer;
@@ -216,6 +249,12 @@ final class _MockRequest implements HttpClientRequest {
       _timer ??= Timer(Duration(milliseconds: _rule.delayMs), () {
         if (_done.isCompleted) return;
         _onFinish(this);
+        _traffic?.finish(
+          mocked: true,
+          statusCode: _rule.statusCode,
+          contentType: _rule.responseHeaders['content-type'],
+          body: jsonEncode(_rule.body),
+        );
         _done.complete(_MockResponse(method, _rule));
       });
     }
@@ -227,6 +266,10 @@ final class _MockRequest implements HttpClientRequest {
     if (_done.isCompleted) return;
     _timer?.cancel();
     _onFinish(this);
+    _traffic?.fail(
+      exception ?? const HttpException('Request has been aborted'),
+      mocked: true,
+    );
     _done.completeError(
       exception ?? HttpException('Request has been aborted', uri: uri),
       stackTrace,
@@ -234,20 +277,28 @@ final class _MockRequest implements HttpClientRequest {
   }
 
   @override
-  void add(List<int> data) {}
+  void add(List<int> data) => _traffic?.collectRequestBytes(data);
   @override
-  void write(Object? object) {}
+  void write(Object? object) => _traffic?.collectRequestText('$object');
   @override
-  void writeAll(Iterable<dynamic> objects, [String separator = '']) {}
+  void writeAll(Iterable<dynamic> objects, [String separator = '']) =>
+      _traffic?.collectRequestText(objects.join(separator));
   @override
-  void writeln([Object? object = '']) {}
+  void writeln([Object? object = '']) =>
+      _traffic?.collectRequestText('$object\n');
   @override
-  void writeCharCode(int charCode) {}
+  void writeCharCode(int charCode) =>
+      _traffic?.collectRequestText(String.fromCharCode(charCode));
   @override
   void addError(Object error, [StackTrace? stackTrace]) =>
       abort(error, stackTrace);
   @override
-  Future<void> addStream(Stream<List<int>> stream) => stream.drain<void>();
+  Future<void> addStream(Stream<List<int>> stream) async {
+    await for (final chunk in stream) {
+      add(chunk);
+    }
+  }
+
   @override
   Future<void> flush() => Future.value();
 }
@@ -459,3 +510,231 @@ const _reasonPhrases = {
   503: 'Service Unavailable',
   504: 'Gateway Timeout',
 };
+
+/// Delegating `HttpClientRequest` for pass-through requests that records the
+/// request body and wraps the response for capture.
+final class _RecordingHttpClientRequest implements HttpClientRequest {
+  _RecordingHttpClientRequest(this._traffic, this._inner);
+
+  final TrafficRecording _traffic;
+  final HttpClientRequest _inner;
+
+  HttpClientResponse _wrap(HttpClientResponse response) =>
+      _RecordingHttpClientResponse(response, _traffic);
+
+  Never _fail(Object error, StackTrace stackTrace) {
+    _traffic.fail(error);
+    Error.throwWithStackTrace(error, stackTrace);
+  }
+
+  @override
+  Future<HttpClientResponse> get done =>
+      _inner.done.then(_wrap, onError: _fail);
+  @override
+  Future<HttpClientResponse> close() =>
+      _inner.close().then(_wrap, onError: _fail);
+
+  @override
+  void abort([Object? exception, StackTrace? stackTrace]) {
+    _traffic.fail(exception ?? 'request aborted');
+    _inner.abort(exception, stackTrace);
+  }
+
+  @override
+  void add(List<int> data) {
+    _traffic.collectRequestBytes(data);
+    _inner.add(data);
+  }
+
+  @override
+  Future<void> addStream(Stream<List<int>> stream) => _inner.addStream(
+    stream.map((chunk) {
+      _traffic.collectRequestBytes(chunk);
+      return chunk;
+    }),
+  );
+
+  @override
+  void write(Object? object) {
+    _traffic.collectRequestText('$object');
+    _inner.write(object);
+  }
+
+  @override
+  void writeAll(Iterable<dynamic> objects, [String separator = '']) {
+    _traffic.collectRequestText(objects.join(separator));
+    _inner.writeAll(objects, separator);
+  }
+
+  @override
+  void writeln([Object? object = '']) {
+    _traffic.collectRequestText('$object\n');
+    _inner.writeln(object);
+  }
+
+  @override
+  void writeCharCode(int charCode) {
+    _traffic.collectRequestText(String.fromCharCode(charCode));
+    _inner.writeCharCode(charCode);
+  }
+
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) =>
+      _inner.addError(error, stackTrace);
+  @override
+  Future<void> flush() => _inner.flush();
+
+  @override
+  String get method => _inner.method;
+  @override
+  Uri get uri => _inner.uri;
+  @override
+  HttpHeaders get headers => _inner.headers;
+  @override
+  List<Cookie> get cookies => _inner.cookies;
+  @override
+  HttpConnectionInfo? get connectionInfo => _inner.connectionInfo;
+  @override
+  bool get persistentConnection => _inner.persistentConnection;
+  @override
+  set persistentConnection(bool value) => _inner.persistentConnection = value;
+  @override
+  bool get followRedirects => _inner.followRedirects;
+  @override
+  set followRedirects(bool value) => _inner.followRedirects = value;
+  @override
+  int get maxRedirects => _inner.maxRedirects;
+  @override
+  set maxRedirects(int value) => _inner.maxRedirects = value;
+  @override
+  int get contentLength => _inner.contentLength;
+  @override
+  set contentLength(int value) => _inner.contentLength = value;
+  @override
+  bool get bufferOutput => _inner.bufferOutput;
+  @override
+  set bufferOutput(bool value) => _inner.bufferOutput = value;
+  @override
+  Encoding get encoding => _inner.encoding;
+  @override
+  set encoding(Encoding value) => _inner.encoding = value;
+}
+
+/// Delegating `HttpClientResponse` that tees the body into the capture entry
+/// while forwarding every byte to the app unchanged.
+final class _RecordingHttpClientResponse extends StreamView<List<int>>
+    implements HttpClientResponse {
+  _RecordingHttpClientResponse(this._inner, TrafficRecording traffic)
+    : super(_tee(_inner, traffic));
+
+  final HttpClientResponse _inner;
+
+  /// Content types worth keeping as text; anything else becomes a size
+  /// placeholder so binary payloads never reach the capture view.
+  static const _textualMimePrefixes = [
+    'text/',
+    'application/json',
+    'application/xml',
+    'application/javascript',
+    'application/x-www-form-urlencoded',
+  ];
+
+  static bool _isTextual(String? mime) {
+    if (mime == null) return true;
+    return _textualMimePrefixes.any(mime.startsWith) ||
+        mime.contains('+json') ||
+        mime.contains('+xml');
+  }
+
+  static String _describeBody(ContentType? contentType, List<int> bytes) {
+    final mime = contentType?.mimeType.toLowerCase();
+    if (!_isTextual(mime)) return '<binary ${bytes.length} bytes>';
+    return utf8.decode(bytes, allowMalformed: true);
+  }
+
+  static Stream<List<int>> _tee(
+    HttpClientResponse inner,
+    TrafficRecording traffic,
+  ) {
+    late final StreamSubscription<List<int>> subscription;
+    final controller = StreamController<List<int>>(sync: true);
+    final received = BytesBuilder(copy: false);
+    var capped = false;
+    var settled = false;
+
+    controller.onListen = () {
+      subscription = inner.listen(
+        (chunk) {
+          if (received.length < TrafficRecorder.maxBodyBytes) {
+            received.add(chunk);
+          } else {
+            capped = true;
+          }
+          controller.add(chunk);
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          settled = true;
+          traffic.fail(error);
+          controller.addError(error, stackTrace);
+        },
+        onDone: () {
+          settled = true;
+          traffic.finish(
+            statusCode: inner.statusCode,
+            contentType: inner.headers.value(HttpHeaders.contentTypeHeader),
+            body: _describeBody(inner.headers.contentType, received.toBytes()),
+            truncated: capped,
+          );
+          controller.close();
+        },
+        cancelOnError: false,
+      );
+    };
+    controller.onPause = () {
+      subscription.pause();
+    };
+    controller.onResume = () {
+      subscription.resume();
+    };
+    controller.onCancel = () {
+      if (!settled) {
+        settled = true;
+        traffic.fail('response stream cancelled');
+      }
+      return subscription.cancel();
+    };
+    return controller.stream;
+  }
+
+  @override
+  int get statusCode => _inner.statusCode;
+  @override
+  String get reasonPhrase => _inner.reasonPhrase;
+  @override
+  HttpHeaders get headers => _inner.headers;
+  @override
+  int get contentLength => _inner.contentLength;
+  @override
+  bool get persistentConnection => _inner.persistentConnection;
+  @override
+  bool get isRedirect => _inner.isRedirect;
+  @override
+  List<RedirectInfo> get redirects => _inner.redirects;
+  @override
+  X509Certificate? get certificate => _inner.certificate;
+  @override
+  HttpConnectionInfo? get connectionInfo => _inner.connectionInfo;
+  @override
+  List<Cookie> get cookies => _inner.cookies;
+  @override
+  HttpClientResponseCompressionState get compressionState =>
+      _inner.compressionState;
+  @override
+  Future<HttpClientResponse> redirect([
+    String? method,
+    Uri? url,
+    bool? followLoops,
+  ]) => _inner.redirect(method, url, followLoops);
+  @override
+  Future<Socket> detachSocket() => _inner.detachSocket();
+}

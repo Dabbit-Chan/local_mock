@@ -9,15 +9,25 @@ import 'package:vm_service/vm_service_io.dart';
 import 'vm_service_uri.dart';
 
 class MockTarget {
-  const MockTarget(this.id, this.name);
+  const MockTarget(this.id, this.name, {this.supportsCapture = false});
+
   final String id;
   final String name;
+  final bool supportsCapture;
 }
 
 /// Polling discovers extensions registered after connection / hot restart.
 /// Only acknowledged rules are restored into a replacement isolate.
+///
+/// Traffic capture polls the app-side ring buffer with a revision cursor
+/// while [setCaptureLive] is enabled and a target is selected.
 class MockConnection extends ChangeNotifier {
   static const _timeout = Duration(seconds: 8);
+  static const _trafficInterval = Duration(seconds: 1);
+
+  /// Local display cap; the app-side buffer keeps fewer entries itself.
+  static const _maxTrafficEntries = 500;
+
   VmService? _service;
   Timer? _poll;
   int _generation = 0;
@@ -29,6 +39,12 @@ class MockConnection extends ChangeNotifier {
   List<Map<String, dynamic>>? _lastApplied;
   int? _remoteRuleCount;
 
+  Timer? _trafficPoll;
+  bool _captureLive = false;
+  bool _trafficBusy = false;
+  List<Map<String, dynamic>> _traffic = const [];
+  int _trafficCursor = 0;
+
   bool get connected => _service != null;
   bool get working => _working;
   bool get ready => connected && _selectedId != null && !working;
@@ -36,6 +52,20 @@ class MockConnection extends ChangeNotifier {
   List<MockTarget> get targets => _targets;
   String? get selectedId => _selectedId;
   int? get remoteRuleCount => _remoteRuleCount;
+
+  /// Whether the selected target implements the traffic extensions.
+  bool get captureAvailable {
+    final id = _selectedId;
+    return id != null &&
+        _targets.any((target) => target.id == id && target.supportsCapture);
+  }
+
+  /// Whether the UI wants live traffic (only polls while a capture-capable
+  /// target is selected).
+  bool get captureLive => _captureLive;
+
+  /// Captured entries, oldest first.
+  List<Map<String, dynamic>> get traffic => _traffic;
 
   void _notify() {
     if (!_disposed) notifyListeners();
@@ -46,7 +76,7 @@ class MockConnection extends ChangeNotifier {
 
   Future<void> connect(String address) async {
     final uri = normalizeVmServiceUri(address);
-    disconnect();
+    disconnect(clearTraffic: false);
     final generation = _generation;
     _working = true;
     _status = '正在连接…';
@@ -110,7 +140,15 @@ class MockConnection extends ChangeNotifier {
             LocalMockProtocol.replaceRules,
             LocalMockProtocol.clear,
           ].every(extensions.contains)) {
-            targets.add(MockTarget(id, isolate.name ?? id));
+            targets.add(
+              MockTarget(
+                id,
+                isolate.name ?? id,
+                supportsCapture: extensions.contains(
+                  LocalMockProtocol.getTraffic,
+                ),
+              ),
+            );
           }
         } on RPCError {
           // An isolate may exit between getVM and getIsolate.
@@ -121,6 +159,7 @@ class MockConnection extends ChangeNotifier {
       if (!targets.any((target) => target.id == _selectedId)) {
         _selectedId = null;
         _remoteRuleCount = null;
+        _resetTraffic();
         if (targets.length == 1) {
           final target = targets.single;
           await _syncTarget(service, target.id);
@@ -140,6 +179,8 @@ class MockConnection extends ChangeNotifier {
     }
   }
 
+  /// Calls an extension and validates the wire protocol version, accepting
+  /// answers of any shape (rules state vs. traffic snapshot).
   Future<Map<String, dynamic>> _call(
     VmService service,
     String isolateId,
@@ -150,9 +191,28 @@ class MockConnection extends ChangeNotifier {
         .callServiceExtension(method, isolateId: isolateId, args: args)
         .timeout(_timeout);
     final json = response.json;
-    if (json == null || json['protocolVersion'] != LocalMockProtocol.version) {
-      throw const FormatException('local_mock 协议版本不兼容');
+    final remote = json?['protocolVersion'];
+    if (json == null || remote is! int || remote <= 0) {
+      throw const FormatException('local_mock 返回了无效响应');
     }
+    if (remote > LocalMockProtocol.version) {
+      throw FormatException('协议版本不兼容（App 端 v$remote）');
+    }
+    if (remote < LocalMockProtocol.version) {
+      throw const FormatException(
+        'App 端 local_mock 版本过旧，请升级 local_mock_dio / local_mock_http 至 0.2.0+',
+      );
+    }
+    return json;
+  }
+
+  Future<Map<String, dynamic>> _callState(
+    VmService service,
+    String isolateId,
+    String method, [
+    Map<String, dynamic>? args,
+  ]) async {
+    final json = await _call(service, isolateId, method, args);
     if (json['rules'] is! List) {
       throw const FormatException('local_mock 返回了无效的规则状态');
     }
@@ -166,10 +226,10 @@ class MockConnection extends ChangeNotifier {
 
   Future<void> _syncTarget(VmService service, String id) async {
     // Check compatibility before modifying a newly discovered target.
-    var state = await _call(service, id, LocalMockProtocol.getState);
+    var state = await _callState(service, id, LocalMockProtocol.getState);
     if (!_current(service)) return;
     if (_lastApplied case final rules?) {
-      state = await _call(
+      state = await _callState(
         service,
         id,
         LocalMockProtocol.replaceRules,
@@ -180,6 +240,7 @@ class MockConnection extends ChangeNotifier {
     _selectedId = id;
     _remoteRuleCount = (state['rules'] as List).length;
     _status = _lastApplied == null ? '已就绪' : '已就绪，已恢复上次确认的规则';
+    _syncTrafficPolling();
   }
 
   Future<void> selectTarget(String id) async {
@@ -188,6 +249,7 @@ class MockConnection extends ChangeNotifier {
     _working = true;
     _selectedId = null;
     _remoteRuleCount = null;
+    _resetTraffic();
     _notify();
     try {
       await _syncTarget(service, id);
@@ -219,7 +281,7 @@ class MockConnection extends ChangeNotifier {
     _status = '正在同步…';
     _notify();
     try {
-      final state = await _call(
+      final state = await _callState(
         service,
         id,
         method,
@@ -240,11 +302,85 @@ class MockConnection extends ChangeNotifier {
     }
   }
 
+  /// Enables / disables live capture polling (kept across reconnects).
+  void setCaptureLive(bool value) {
+    if (_captureLive == value) return;
+    _captureLive = value;
+    _syncTrafficPolling();
+    _notify();
+  }
+
+  void _resetTraffic() {
+    _trafficPoll?.cancel();
+    _trafficPoll = null;
+    _traffic = const [];
+    _trafficCursor = 0;
+  }
+
+  void _syncTrafficPolling() {
+    _trafficPoll?.cancel();
+    _trafficPoll = null;
+    if (!_captureLive || !captureAvailable || _service == null) return;
+    unawaited(_pollTraffic());
+    _trafficPoll = Timer.periodic(_trafficInterval, (_) {
+      unawaited(_pollTraffic());
+    });
+  }
+
+  Future<void> _pollTraffic() async {
+    final service = _service;
+    final id = _selectedId;
+    if (service == null || id == null || _trafficBusy) return;
+    _trafficBusy = true;
+    try {
+      final json = await _call(service, id, LocalMockProtocol.getTraffic, {
+        'sinceRevision': '$_trafficCursor',
+      });
+      if (!_current(service) || id != _selectedId) return;
+      final revision = json['trafficRevision'];
+      final entries = json['entries'];
+      if (revision is! int || revision < 0 || entries is! List) {
+        throw const FormatException('local_mock 返回了无效的抓包数据');
+      }
+      final fresh = entries.whereType<Map<String, dynamic>>().toList();
+      if (fresh.isNotEmpty) {
+        final merged = [..._traffic, ...fresh];
+        _traffic = List.unmodifiable(
+          merged.length > _maxTrafficEntries
+              ? merged.sublist(merged.length - _maxTrafficEntries)
+              : merged,
+        );
+      }
+      _trafficCursor = revision;
+      if (fresh.isNotEmpty) _notify();
+    } catch (_) {
+      // Transient polling failures are retried on the next tick; permanent
+      // incompatibilities surface through the rules calls.
+    } finally {
+      _trafficBusy = false;
+    }
+  }
+
+  /// Clears the app-side buffer and the local list.
+  Future<void> clearTraffic() async {
+    final service = _service;
+    final id = _selectedId;
+    if (service == null || id == null) {
+      throw StateError('请先连接并选择目标');
+    }
+    final json = await _call(service, id, LocalMockProtocol.clearTraffic);
+    final revision = json['trafficRevision'];
+    _trafficCursor = revision is int ? revision : _trafficCursor;
+    _traffic = const [];
+    _notify();
+  }
+
   /// Disconnect is not clear: the app retains its in-memory rules.
-  void disconnect() {
+  void disconnect({bool clearTraffic = true}) {
     _generation++;
     _poll?.cancel();
     _poll = null;
+    if (clearTraffic) _resetTraffic();
     final service = _service;
     _service = null;
     if (service != null) unawaited(service.dispose());
