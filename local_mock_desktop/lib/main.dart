@@ -4,10 +4,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_reorderable_grid_view/widgets/widgets.dart';
-import 'package:local_mock_core/local_mock_core.dart';
 
 import 'src/capture_panel.dart';
-import 'src/draft_store.dart';
 import 'src/mock_connection.dart';
 import 'src/rule_edit_dialog.dart';
 
@@ -38,25 +36,11 @@ class LocalMockApp extends StatelessWidget {
 /// status line compact so it never crowds out the rule cards.
 String _firstLine(Object error) => error.toString().split('\n').first;
 
-Map<String, dynamic> _exampleRule() => {
-  'id': 'user-profile',
-  'enabled': true,
-  'method': 'GET',
-  'path': '/api/user/profile',
-  'statusCode': 200,
-  'delayMs': 300,
-  'body': {'name': '测试用户', 'level': 10},
-};
-
-List<Map<String, dynamic>> _parseRules(String text) => [
-  for (final rule in MockRule.parseList(jsonDecode(text))) rule.toJson(),
-];
-
 class MockPage extends StatefulWidget {
-  const MockPage({super.key, this.draftStore, this.connection});
+  const MockPage({super.key, this.initialRules, this.connection});
 
-  /// Overrides the file-backed store, e.g. for tests.
-  final DraftStore? draftStore;
+  /// Supplies initial rules, e.g. for tests.
+  final List<Map<String, dynamic>>? initialRules;
 
   /// Overrides the VM Service client, e.g. for tests; not disposed by the
   /// page when injected.
@@ -72,52 +56,22 @@ enum MockPageView { rules, capture }
 class _MockPageState extends State<MockPage> {
   late final MockConnection _connection = widget.connection ?? MockConnection();
   late final bool _ownsConnection = widget.connection == null;
-  late final _draftStore = widget.draftStore ?? DraftStore();
   final _address = TextEditingController();
   final _scrollController = ScrollController();
   final _gridKey = GlobalKey();
-  List<Map<String, dynamic>> _rules = const [];
+  late List<Map<String, dynamic>> _rules;
   String? _message;
-  String? _brokenDraft;
-  bool _loadingDraft = true;
-  bool _savingDraft = false;
   MockPageView _view = MockPageView.rules;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_loadDraft());
-  }
-
-  Future<void> _loadDraft() async {
-    try {
-      final text = await _draftStore.load();
-      if (!mounted) return;
-      setState(() {
-        if (text == null) {
-          _rules = [_exampleRule()];
-        } else {
-          try {
-            _rules = _parseRules(text);
-          } on FormatException catch (error) {
-            _brokenDraft = text;
-            _rules = const [];
-            _message = '本地草稿解析失败：${_firstLine(error)}';
-          } on TypeError catch (error) {
-            _brokenDraft = text;
-            _rules = const [];
-            _message = '本地草稿结构不合法：${_firstLine(error)}';
-          }
-        }
-      });
-    } catch (error) {
-      if (mounted) setState(() => _message = '读取草稿失败：${_firstLine(error)}');
-    } finally {
-      if (mounted) {
-        setState(() => _loadingDraft = false);
-        if (_brokenDraft == null) _rulesChanged();
-      }
-    }
+    _rules =
+        widget.initialRules
+            ?.map((rule) => Map<String, dynamic>.of(rule))
+            .toList() ??
+        [];
+    _rulesChanged();
   }
 
   Future<void> _action(Future<void> Function() action) async {
@@ -126,23 +80,6 @@ class _MockPageState extends State<MockPage> {
       await action();
     } catch (error) {
       if (mounted) setState(() => _message = _firstLine(error));
-    }
-  }
-
-  Future<void> _saveDraft() async {
-    setState(() => _savingDraft = true);
-    try {
-      final path = await _draftStore.save(
-        const JsonEncoder.withIndent('  ').convert(_rules),
-      );
-      if (mounted) {
-        setState(() {
-          _brokenDraft = null;
-          _message = '草稿已保存到 $path';
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _savingDraft = false);
     }
   }
 
@@ -230,32 +167,6 @@ class _MockPageState extends State<MockPage> {
       );
   }
 
-  Future<void> _viewBrokenDraft() async {
-    final text = _brokenDraft;
-    if (text == null) return;
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('原始草稿内容'),
-        content: SizedBox(
-          width: 560,
-          child: SingleChildScrollView(
-            child: SelectableText(
-              text,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: Navigator.of(context).pop,
-            child: const Text('关闭'),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _selectView(MockPageView view) => setState(() {
     _view = view;
     // Poll traffic only while the capture tab is actually visible.
@@ -296,7 +207,7 @@ class _MockPageState extends State<MockPage> {
                 ),
                 const SizedBox(width: 12),
                 FilledButton(
-                  onPressed: _connection.working || _loadingDraft
+                  onPressed: _connection.working
                       ? null
                       : () {
                           if (_connection.connected) {
@@ -385,7 +296,7 @@ class _MockPageState extends State<MockPage> {
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           FilledButton.icon(
-            onPressed: _connection.ready && !_loadingDraft
+            onPressed: _connection.ready
                 ? () => unawaited(
                     _action(() => _connection.apply(jsonEncode(_rules))),
                   )
@@ -399,27 +310,8 @@ class _MockPageState extends State<MockPage> {
                 : null,
             child: const Text('清空手机规则'),
           ),
-          OutlinedButton(
-            onPressed: _loadingDraft || _savingDraft
-                ? null
-                : () => unawaited(_action(_saveDraft)),
-            child: _savingDraft
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('保存本地草稿'),
-          ),
         ],
       ),
-      if (_brokenDraft != null) ...[
-        const SizedBox(height: 8),
-        _BrokenDraftBanner(
-          onView: () => unawaited(_viewBrokenDraft()),
-          onDismiss: () => setState(() => _brokenDraft = null),
-        ),
-      ],
       const SizedBox(height: 12),
       Row(
         children: [
@@ -430,9 +322,7 @@ class _MockPageState extends State<MockPage> {
             ),
           ),
           FilledButton.tonalIcon(
-            onPressed: _loadingDraft || _savingDraft
-                ? null
-                : () => unawaited(_addRule()),
+            onPressed: () => unawaited(_addRule()),
             icon: const Icon(Icons.add),
             label: const Text('添加规则'),
           ),
@@ -466,9 +356,6 @@ class _MockPageState extends State<MockPage> {
   );
 
   Widget _buildRulesArea() {
-    if (_loadingDraft) {
-      return const Center(child: CircularProgressIndicator());
-    }
     if (_rules.isEmpty) {
       return Center(
         child: FittedBox(
@@ -544,39 +431,6 @@ class _MockPageState extends State<MockPage> {
             onDelete: () => _deleteRule(index),
           ),
       ],
-    );
-  }
-}
-
-class _BrokenDraftBanner extends StatelessWidget {
-  const _BrokenDraftBanner({required this.onView, required this.onDismiss});
-
-  final VoidCallback onView;
-  final VoidCallback onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      decoration: BoxDecoration(
-        color: scheme.errorContainer,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.warning_amber_rounded, color: scheme.onErrorContainer),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              '本地草稿无法解析，已显示为空规则。可查看原始内容，或编辑后保存覆盖。',
-              style: TextStyle(color: scheme.onErrorContainer),
-            ),
-          ),
-          TextButton(onPressed: onView, child: const Text('查看原始')),
-          TextButton(onPressed: onDismiss, child: const Text('忽略')),
-        ],
-      ),
     );
   }
 }

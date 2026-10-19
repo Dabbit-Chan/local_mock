@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:local_mock_desktop/main.dart';
-import 'package:local_mock_desktop/src/draft_store.dart';
 import 'package:local_mock_desktop/src/mock_connection.dart';
 
 class _RecordingConnection extends MockConnection {
@@ -15,36 +14,56 @@ class _RecordingConnection extends MockConnection {
   }
 }
 
-class _InMemoryDraftStore extends DraftStore {
-  _InMemoryDraftStore(this.text);
+const _fixtureRules = [
+  {
+    'id': 'user-profile',
+    'enabled': true,
+    'method': 'GET',
+    'path': '/api/user/profile',
+  },
+];
 
-  String? text;
-
-  @override
-  Future<String?> load() async => text;
-
-  @override
-  Future<String> save(String text) async {
-    this.text = text;
-    return '/mock/rules.json';
-  }
-}
-
-Widget _app({String? draft}) =>
-    MaterialApp(home: MockPage(draftStore: _InMemoryDraftStore(draft)));
+Widget _app({String? rules}) => MaterialApp(
+  home: MockPage(
+    initialRules: rules == null
+        ? _fixtureRules
+        : (jsonDecode(rules) as List).cast<Map<String, dynamic>>(),
+  ),
+);
 
 void main() {
-  testWidgets('synchronizes loaded rules, toggles, edits and additions', (
+  testWidgets('starts with no rules and synchronizes an empty list', (
+    tester,
+  ) async {
+    final connection = _RecordingConnection();
+    addTearDown(connection.dispose);
+    await tester.pumpWidget(
+      MaterialApp(home: MockPage(connection: connection)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('暂无规则，添加一条开始 Mock'), findsOneWidget);
+    expect(find.byType(RuleCard), findsNothing);
+    expect(connection.updates.single, isEmpty);
+
+    await tester.tap(find.text('添加规则').first);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, '路径'), '/first');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('GET /first'), findsOneWidget);
+    expect(connection.updates.last.single['path'], '/first');
+  });
+
+  testWidgets('synchronizes initial rules, toggles, edits and additions', (
     tester,
   ) async {
     final connection = _RecordingConnection();
     addTearDown(connection.dispose);
     await tester.pumpWidget(
       MaterialApp(
-        home: MockPage(
-          draftStore: _InMemoryDraftStore(null),
-          connection: connection,
-        ),
+        home: MockPage(initialRules: _fixtureRules, connection: connection),
       ),
     );
     await tester.pumpAndSettle();
@@ -70,7 +89,7 @@ void main() {
     expect(connection.updates.last.last['path'], '/added');
   });
 
-  testWidgets('renders the example rule as a card and toggles enabled', (
+  testWidgets('renders an initial rule as a card and toggles enabled', (
     tester,
   ) async {
     await tester.pumpWidget(_app());
@@ -85,10 +104,10 @@ void main() {
     expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
   });
 
-  testWidgets('loads a saved draft as multiple cards', (tester) async {
+  testWidgets('renders initial rules as multiple cards', (tester) async {
     await tester.pumpWidget(
       _app(
-        draft:
+        rules:
             '[{"id":"a","enabled":false,"method":"GET","path":"/a"},'
             '{"id":"b","enabled":true,"method":"POST","path":"/b","delayMs":120}]',
       ),
@@ -158,7 +177,7 @@ void main() {
   testWidgets('reorders rules by dragging a card onto another', (tester) async {
     await tester.pumpWidget(
       _app(
-        draft:
+        rules:
             '[{"id":"a","enabled":true,"method":"GET","path":"/a"},'
             '{"id":"b","enabled":true,"method":"GET","path":"/b"}]',
       ),
@@ -191,7 +210,7 @@ void main() {
     testWidgets('keeps $ruleCount cards sized and anchored while resizing', (
       tester,
     ) async {
-      final draft =
+      final rules =
           '[${List.generate(ruleCount, (index) => '{"id":"r$index","enabled":true,"method":"GET","path":"/$index"}').join(',')}]';
       final firstCard = find.byKey(const ValueKey('rule-r0'));
 
@@ -199,7 +218,7 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       tester.view.physicalSize = const Size(700, 900);
-      await tester.pumpWidget(_app(draft: draft));
+      await tester.pumpWidget(_app(rules: rules));
       await tester.pumpAndSettle();
       final originalSize = tester.getSize(firstCard);
       final originalLeft = tester.getTopLeft(firstCard).dx;
@@ -257,16 +276,6 @@ void main() {
       }
     });
   }
-
-  testWidgets('shows a banner for an unparsable draft', (tester) async {
-    await tester.pumpWidget(_app(draft: 'not json'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('暂无规则，添加一条开始 Mock'), findsOneWidget);
-    expect(find.byType(Switch), findsNothing);
-    expect(find.text('查看原始'), findsOneWidget);
-    expect(find.text('忽略'), findsOneWidget);
-  });
 
   testWidgets('switches between rules and capture views', (tester) async {
     await tester.pumpWidget(_app());
@@ -324,7 +333,7 @@ void main() {
   testWidgets('reorders rules by dragging a card onto another', (tester) async {
     await tester.pumpWidget(
       _app(
-        draft:
+        rules:
             '[{"id":"a","enabled":true,"method":"GET","path":"/a"},'
             '{"id":"b","enabled":true,"method":"GET","path":"/b"}]',
       ),
@@ -357,7 +366,7 @@ void main() {
     testWidgets('keeps $ruleCount cards sized and anchored while resizing', (
       tester,
     ) async {
-      final draft =
+      final rules =
           '[${List.generate(ruleCount, (index) => '{"id":"r$index","enabled":true,"method":"GET","path":"/$index"}').join(',')}]';
       final firstCard = find.byKey(const ValueKey('rule-r0'));
 
@@ -365,7 +374,7 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       tester.view.physicalSize = const Size(700, 900);
-      await tester.pumpWidget(_app(draft: draft));
+      await tester.pumpWidget(_app(rules: rules));
       await tester.pumpAndSettle();
       final originalSize = tester.getSize(firstCard);
       final originalLeft = tester.getTopLeft(firstCard).dx;
@@ -423,14 +432,4 @@ void main() {
       }
     });
   }
-
-  testWidgets('shows a banner for an unparsable draft', (tester) async {
-    await tester.pumpWidget(_app(draft: 'not json'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('暂无规则，添加一条开始 Mock'), findsOneWidget);
-    expect(find.byType(Switch), findsNothing);
-    expect(find.text('查看原始'), findsOneWidget);
-    expect(find.text('忽略'), findsOneWidget);
-  });
 }
