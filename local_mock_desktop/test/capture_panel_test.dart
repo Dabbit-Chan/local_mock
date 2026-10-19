@@ -50,6 +50,27 @@ Widget panel(
 );
 
 void main() {
+  testWidgets('disconnected capture retains filtering and request details', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(
+        panel(
+          [entry('/retained')],
+          connected: false,
+          ready: false,
+          available: false,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('api.test/retained'), findsOneWidget);
+    expect(find.textContaining('已断开，保留记录'), findsOneWidget);
+    await tester.tap(find.text('api.test/retained'));
+    await tester.pumpAndSettle();
+    expect(find.text('请求详情'), findsOneWidget);
+  });
+
   testWidgets('renders entries newest first with status and mock badges', (
     tester,
   ) async {

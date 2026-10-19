@@ -17,7 +17,7 @@ Flutter 调试期接口 Mock 工具。桌面端通过 Dart VM Service 把 Mock �
 
 1. App 接入 `local_mock_dio` 或 `local_mock_http` 后，会在当前 isolate 注册 `ext.local_mock.getState` / `replaceRules` / `clear` / `getTraffic` / `clearTraffic` 五个 VM Service 扩展。
 2. 桌面端连接 App 的 VM Service 地址，自动发现注册了扩展的 isolate。
-3. 点击“应用到手机”后，规则整体替换 App 内存中的规则表；命中规则的请求直接返回 Mock 响应，其余请求照常走网络。
+3. 每次连接自动应用桌面端全部规则；新增、编辑保存和开关变更后也会自动同步，整体替换 App 内存中的规则表。命中规则的请求直接返回 Mock 响应，其余请求照常走网络。
 4. 适配器同时会把经过的每条请求（含真实响应与 Mock 响应）记录到 isolate 内的环形缓冲区；桌面端切到“抓包”页后增量拉取展示。
 
 ## 快速开始
@@ -44,7 +44,7 @@ Flutter 调试期接口 Mock 工具。桌面端通过 Dart VM Service 把 Mock �
 
    `http(s)://` 和 `ws(s)://` 开头的地址都可以，例如 `ws://127.0.0.1:12345/xxxxxx=/ws`，桌面端会自动转换为 WebSocket 地址并补全 `/ws`。注意要复制 VM Service 地址，不是 DevTools 页面地址。
 
-3. 启动桌面端，粘贴地址并连接，编辑规则后点击“应用到手机”：
+3. 启动桌面端，粘贴地址并连接，规则会自动应用；编辑保存后也会自动同步：
 
    ```bash
    cd local_mock_desktop
@@ -56,7 +56,7 @@ Flutter 调试期接口 Mock 工具。桌面端通过 Dart VM Service 把 Mock �
 连接后切换到“抓包”页，桌面端会实时同步 App 内经过 `local_mock_dio` / `local_mock_http` 的请求（未命中 Mock 规则的真实请求和 Mock 命中的请求都会记录）：
 
 - 点击某条记录查看详情：完整 URL、请求体、状态码、耗时、响应体（JSON 自动格式化）。
-- 点击记录右侧的闪电按钮（或详情弹窗里的“生成 Mock 规则”），会用该请求的 method / host / path / 状态码 / 响应体预填规则编辑弹窗，确认保存后规则进入本地规则列表，再“应用到手机”即可生效。
+- 点击记录右侧的闪电按钮（或详情弹窗里的“生成 Mock 规则”），会用该请求的 method / host / path / 状态码 / 响应体预填规则编辑弹窗，确认保存后规则进入本地规则列表，连接就绪时自动应用。
 - 响应体是 JSON 时会解析为结构化 body；非 JSON 文本会作为字符串 body；二进制内容不会记录。
 - 抓包记录只存在 App 内存中，不限制条数，请求/响应体完整保留。
 
@@ -102,5 +102,6 @@ cp -R /tmp/local_mock/skills/local-mock-rules <业务仓库>/.agents/skills/   #
 
 - 协议版本 v2（0.2.0+）：新版桌面端连接旧版 App 端（协议 v1）时会提示升级，不再兼容混用；请同时升级仓库内所有包。
 - VM Service 地址带有鉴权 token，等同于 App 的调试权限，不要分享给他人。桌面端只保存规则草稿，不保存地址。
-- 规则只存在于 App 进程内存中。断开桌面端连接不会清空规则；App 重启后规则消失。抓包记录同理，且 Hot Restart 后重新开始记录。
-- Hot Restart 后桌面端会把上一次确认应用的规则自动恢复到新 isolate。
+- 断开桌面端连接不会清空 App 规则；桌面端保留抓包记录供查看，下次连接时清空本地和 App 端抓包缓冲。Hot Restart 后抓包重新开始记录。
+- 规则仅保存在 App isolate 内存中，冷启动时为空，不读取上一次运行的规则。
+- Hot Restart 后，只有桌面端保持连接时，才会在发现新 isolate 后自动重新下发当前全部规则；未连接桌面端时，规则为空。重新连接桌面端也会自动应用当前全部规则。

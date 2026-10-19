@@ -17,7 +17,7 @@ class MockTarget {
 }
 
 /// Polling discovers extensions registered after connection / hot restart.
-/// Only acknowledged rules are restored into a replacement isolate.
+/// The latest desktop rules are synchronized when a target becomes ready.
 ///
 /// Traffic capture polls the app-side ring buffer with a revision cursor
 /// while [setCaptureLive] is enabled and a target is selected.
@@ -37,6 +37,8 @@ class MockConnection extends ChangeNotifier {
   List<MockTarget> _targets = const [];
   String? _selectedId;
   List<Map<String, dynamic>>? _lastApplied;
+  List<Map<String, dynamic>>? _desiredRules;
+  int _rulesVersion = 0;
   int? _remoteRuleCount;
 
   Timer? _trafficPoll;
@@ -44,6 +46,7 @@ class MockConnection extends ChangeNotifier {
   bool _trafficBusy = false;
   List<Map<String, dynamic>> _traffic = const [];
   int _trafficCursor = 0;
+  bool _clearTrafficOnConnect = false;
 
   bool get connected => _service != null;
   bool get working => _working;
@@ -76,7 +79,9 @@ class MockConnection extends ChangeNotifier {
 
   Future<void> connect(String address) async {
     final uri = normalizeVmServiceUri(address);
-    disconnect(clearTraffic: false);
+    disconnect();
+    _resetTraffic();
+    _clearTrafficOnConnect = true;
     final generation = _generation;
     _working = true;
     _status = '正在连接…';
@@ -125,6 +130,7 @@ class MockConnection extends ChangeNotifier {
   Future<void> _discover() async {
     final service = _service;
     if (service == null || _working) return;
+    final version = _rulesVersion;
     _working = true;
     try {
       final vm = await service.getVM().timeout(_timeout);
@@ -175,6 +181,13 @@ class MockConnection extends ChangeNotifier {
       if (_current(service)) {
         _working = false;
         _notify();
+        if (ready && version != _rulesVersion) {
+          try {
+            await _update(LocalMockProtocol.replaceRules, _desiredRules!);
+          } catch (_) {
+            // The synchronization status already contains the failure.
+          }
+        }
       }
     }
   }
@@ -228,18 +241,30 @@ class MockConnection extends ChangeNotifier {
     // Check compatibility before modifying a newly discovered target.
     var state = await _callState(service, id, LocalMockProtocol.getState);
     if (!_current(service)) return;
-    if (_lastApplied case final rules?) {
-      state = await _callState(
-        service,
-        id,
-        LocalMockProtocol.replaceRules,
-        _replaceArgs(rules),
-      );
+    if (_clearTrafficOnConnect &&
+        _targets.any((target) => target.id == id && target.supportsCapture)) {
+      await _call(service, id, LocalMockProtocol.clearTraffic);
+      if (!_current(service)) return;
     }
-    if (!_current(service)) return;
+    _clearTrafficOnConnect = false;
+    var version = _rulesVersion;
+    do {
+      version = _rulesVersion;
+      if (_desiredRules ?? _lastApplied case final rules?) {
+        state = await _callState(
+          service,
+          id,
+          LocalMockProtocol.replaceRules,
+          _replaceArgs(rules),
+        );
+      }
+      if (!_current(service)) return;
+    } while (version != _rulesVersion);
     _selectedId = id;
     _remoteRuleCount = (state['rules'] as List).length;
-    _status = _lastApplied == null ? '已就绪' : '已就绪，已恢复上次确认的规则';
+    _status = _desiredRules == null && _lastApplied == null
+        ? '已就绪'
+        : '已就绪，已自动应用全部规则';
     _syncTrafficPolling();
   }
 
@@ -261,6 +286,15 @@ class MockConnection extends ChangeNotifier {
     }
   }
 
+  /// Keeps edits made while disconnected or busy for the next ready target.
+  Future<void> updateRules(String text) async {
+    _desiredRules = MockRule.parseList(
+      jsonDecode(text),
+    ).map((rule) => rule.toJson()).toList();
+    _rulesVersion++;
+    if (ready) await _update(LocalMockProtocol.replaceRules, _desiredRules!);
+  }
+
   Future<void> apply(String text) async {
     final rules = MockRule.parseList(jsonDecode(text));
     await _update(
@@ -277,6 +311,7 @@ class MockConnection extends ChangeNotifier {
     if (!ready || service == null || id == null) {
       throw StateError('请先连接并选择就绪的 isolate');
     }
+    final version = _rulesVersion;
     _working = true;
     _status = '正在同步…';
     _notify();
@@ -298,6 +333,9 @@ class MockConnection extends ChangeNotifier {
       if (_current(service)) {
         _working = false;
         _notify();
+        if (version != _rulesVersion) {
+          await _update(LocalMockProtocol.replaceRules, _desiredRules!);
+        }
       }
     }
   }
@@ -376,11 +414,12 @@ class MockConnection extends ChangeNotifier {
   }
 
   /// Disconnect is not clear: the app retains its in-memory rules.
-  void disconnect({bool clearTraffic = true}) {
+  void disconnect() {
     _generation++;
     _poll?.cancel();
     _poll = null;
-    if (clearTraffic) _resetTraffic();
+    _trafficPoll?.cancel();
+    _trafficPoll = null;
     final service = _service;
     _service = null;
     if (service != null) unawaited(service.dispose());

@@ -70,6 +70,12 @@ LocalMock.debugClearTraffic();
 2. 每个请求发出前调用 `LocalMock.beginTraffic(method, uri)` 开始记录，并调用 `LocalMock.match(method, uri)` 查找规则。
 3. 命中时按 `statusCode` / `delayMs` / `responseHeaders` / `bodyCopy` 构造响应，并用 `TrafficRecording.finish(mocked: true, ...)` 记录；否则走原始网络请求，结束时 `finish` / `fail` 记录真实结果。
 
+## 规则生命周期
+
+- 规则仅保存在当前 isolate 内存中，不持久化；App 冷启动时规则为空。
+- Hot Restart 会重建 isolate。桌面端保持连接时，会在发现新 isolate 后自动重新下发规则；未连接桌面端时，规则为空。
+- 重复接入适配器不会清空当前 isolate 中的规则。
+
 ## 抓包行为
 
 - 每条记录包含：方法、完整 URI、host、path、请求体（尽力而为）、状态码、耗时、响应体文本、是否 Mock、错误信息。

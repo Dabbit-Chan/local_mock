@@ -113,7 +113,10 @@ class _MockPageState extends State<MockPage> {
     } catch (error) {
       if (mounted) setState(() => _message = '读取草稿失败：${_firstLine(error)}');
     } finally {
-      if (mounted) setState(() => _loadingDraft = false);
+      if (mounted) {
+        setState(() => _loadingDraft = false);
+        if (_brokenDraft == null) _rulesChanged();
+      }
     }
   }
 
@@ -135,7 +138,7 @@ class _MockPageState extends State<MockPage> {
       if (mounted) {
         setState(() {
           _brokenDraft = null;
-          _message = '草稿已保存到 $path（未下发）';
+          _message = '草稿已保存到 $path';
         });
       }
     } finally {
@@ -151,11 +154,18 @@ class _MockPageState extends State<MockPage> {
     return 'rule-$index';
   }
 
-  void _setRule(int index, Map<String, dynamic> rule) => setState(() {
-    final rules = List.of(_rules);
-    rules[index] = rule;
-    _rules = rules;
-  });
+  void _rulesChanged() {
+    unawaited(_action(() => _connection.updateRules(jsonEncode(_rules))));
+  }
+
+  void _setRule(int index, Map<String, dynamic> rule) {
+    setState(() {
+      final rules = List.of(_rules);
+      rules[index] = rule;
+      _rules = rules;
+    });
+    _rulesChanged();
+  }
 
   Future<void> _addRule() async {
     final created = await showDialog<Map<String, dynamic>>(
@@ -174,7 +184,10 @@ class _MockPageState extends State<MockPage> {
         existingIds: _rules.map((rule) => rule['id'] as String).toSet(),
       ),
     );
-    if (created != null) setState(() => _rules = [..._rules, created]);
+    if (created != null && mounted) {
+      setState(() => _rules = [..._rules, created]);
+      _rulesChanged();
+    }
   }
 
   Future<void> _editRule(int index) async {
@@ -190,12 +203,13 @@ class _MockPageState extends State<MockPage> {
         },
       ),
     );
-    if (updated != null) _setRule(index, updated);
+    if (updated != null && mounted) _setRule(index, updated);
   }
 
   void _deleteRule(int index) {
     final removed = _rules[index];
     setState(() => _rules = List.of(_rules)..removeAt(index));
+    _rulesChanged();
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -209,6 +223,7 @@ class _MockPageState extends State<MockPage> {
                 final at = index.clamp(0, _rules.length);
                 _rules = List.of(_rules)..insert(at, removed);
               });
+              _rulesChanged();
             },
           ),
         ),
@@ -281,7 +296,7 @@ class _MockPageState extends State<MockPage> {
                 ),
                 const SizedBox(width: 12),
                 FilledButton(
-                  onPressed: _connection.working
+                  onPressed: _connection.working || _loadingDraft
                       ? null
                       : () {
                           if (_connection.connected) {
@@ -427,8 +442,8 @@ class _MockPageState extends State<MockPage> {
       Expanded(child: _buildRulesArea()),
       const SizedBox(height: 12),
       const Text(
-        '查询参数不参与匹配。应用后需在手机重新请求。\n'
-        '断开连接不会清空手机规则；多 isolate 时，已确认的规则会同步到所选目标。',
+        '连接、保存规则和切换开关后会自动应用，下次请求生效。\n'
+        '断开后保留抓包记录，下次连接时清理；手机规则不会因断开而清空。',
       ),
     ],
   );
@@ -440,7 +455,10 @@ class _MockPageState extends State<MockPage> {
     live: _connection.captureLive,
     entries: _connection.traffic,
     existingRuleIds: _rules.map((rule) => rule['id'] as String).toSet(),
-    onRuleCreated: (rule) => setState(() => _rules = [..._rules, rule]),
+    onRuleCreated: (rule) {
+      setState(() => _rules = [..._rules, rule]);
+      _rulesChanged();
+    },
     onViewRules: () => _selectView(MockPageView.rules),
     onClear: _connection.ready && _connection.captureAvailable
         ? () => unawaited(_action(_connection.clearTraffic))
@@ -480,7 +498,10 @@ class _MockPageState extends State<MockPage> {
       scrollController: _scrollController,
       // No long-press delay: dragging starts as soon as the card moves.
       longPressDelay: Duration.zero,
-      onReorder: (reorder) => setState(() => _rules = reorder(_rules)),
+      onReorder: (reorder) {
+        setState(() => _rules = reorder(_rules));
+        _rulesChanged();
+      },
       builder: (children) => LayoutBuilder(
         builder: (context, constraints) {
           const cardWidth = 300.0;

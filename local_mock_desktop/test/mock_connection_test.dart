@@ -179,6 +179,43 @@ void main() {
     await vm.close();
   });
 
+  test('connect automatically applies all current desktop rules', () async {
+    await connection.updateRules(ruleJson('draft'));
+    await connection.connect(vm.address);
+    expect((vm.rules.single as Map)['body'], {'name': 'draft'});
+    connection.disconnect();
+    await connection.updateRules(ruleJson('offline edit'));
+    await connection.connect(vm.address);
+    expect((vm.rules.single as Map)['body'], {'name': 'offline edit'});
+  });
+
+  test('rapid edits eventually apply the latest rules', () async {
+    await connection.connect(vm.address);
+    final first = connection.updateRules(ruleJson('first'));
+    await connection.updateRules(ruleJson('latest'));
+    await first;
+    expect((vm.rules.single as Map)['body'], {'name': 'latest'});
+  });
+
+  test(
+    'disconnect retains capture until reconnect clears both buffers',
+    () async {
+      await connection.connect(vm.address);
+      connection.setCaptureLive(true);
+      vm.emitTraffic('/retained');
+      await waitUntil(() => connection.traffic.length == 1);
+      connection.disconnect();
+      expect(connection.traffic.single['path'], '/retained');
+      expect(vm.traffic, hasLength(1));
+      await connection.connect(vm.address);
+      expect(connection.traffic, isEmpty);
+      expect(vm.traffic, isEmpty);
+      vm.emitTraffic('/new');
+      await waitUntil(() => connection.traffic.length == 1);
+      expect(connection.traffic.single['path'], '/new');
+    },
+  );
+
   test('connect, apply, acknowledge and clear rules', () async {
     await connection.connect(vm.address);
     expect(connection.ready, isTrue);

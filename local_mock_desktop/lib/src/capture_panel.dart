@@ -161,7 +161,7 @@ class _CapturePanelState extends State<CapturePanel> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text('已从抓包生成规则 ${created['id']}（未下发，可在规则页应用）'),
+          content: Text('已从抓包生成规则 ${created['id']}，连接就绪时自动应用'),
           action: SnackBarAction(label: '查看规则', onPressed: widget.onViewRules),
         ),
       );
@@ -172,19 +172,22 @@ class _CapturePanelState extends State<CapturePanel> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
 
-    if (!widget.connected) {
+    if (!widget.connected && widget.entries.isEmpty) {
       return _HintState(
         icon: Icons.link_off,
         text: '未连接。先在上方连接 App，App 内经过 local_mock 适配器的请求会显示在这里。',
       );
     }
-    if (!widget.ready) {
+    if (widget.connected && !widget.ready && widget.entries.isEmpty) {
       return const _HintState(
         icon: Icons.hourglass_top,
         text: '等待目标就绪…（发现 isolate 后自动选中，或从下拉框选择）',
       );
     }
-    if (!widget.available) {
+    if (widget.connected &&
+        widget.ready &&
+        !widget.available &&
+        widget.entries.isEmpty) {
       return _HintState(
         icon: Icons.system_update,
         text:
@@ -202,7 +205,11 @@ class _CapturePanelState extends State<CapturePanel> {
             Expanded(
               child: Text(
                 '抓包记录（${widget.entries.length}）'
-                '${widget.live ? ' · 实时同步中' : ''}',
+                '${!widget.connected
+                    ? ' · 已断开，保留记录'
+                    : widget.live
+                    ? ' · 实时同步中'
+                    : ''}',
                 style: theme.textTheme.titleSmall,
               ),
             ),

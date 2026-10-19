@@ -1,7 +1,19 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:local_mock_desktop/main.dart';
 import 'package:local_mock_desktop/src/draft_store.dart';
+import 'package:local_mock_desktop/src/mock_connection.dart';
+
+class _RecordingConnection extends MockConnection {
+  final updates = <List<dynamic>>[];
+
+  @override
+  Future<void> updateRules(String text) async {
+    updates.add(jsonDecode(text) as List<dynamic>);
+  }
+}
 
 class _InMemoryDraftStore extends DraftStore {
   _InMemoryDraftStore(this.text);
@@ -22,6 +34,42 @@ Widget _app({String? draft}) =>
     MaterialApp(home: MockPage(draftStore: _InMemoryDraftStore(draft)));
 
 void main() {
+  testWidgets('synchronizes loaded rules, toggles, edits and additions', (
+    tester,
+  ) async {
+    final connection = _RecordingConnection();
+    addTearDown(connection.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MockPage(
+          draftStore: _InMemoryDraftStore(null),
+          connection: connection,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(connection.updates.single.single['path'], '/api/user/profile');
+
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+    expect(connection.updates.last.single['enabled'], false);
+
+    await tester.tap(find.byIcon(Icons.edit_outlined));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, '路径'), '/edited');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(connection.updates.last.single['path'], '/edited');
+
+    await tester.tap(find.text('添加规则'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, '路径'), '/added');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(connection.updates.last, hasLength(2));
+    expect(connection.updates.last.last['path'], '/added');
+  });
+
   testWidgets('renders the example rule as a card and toggles enabled', (
     tester,
   ) async {
