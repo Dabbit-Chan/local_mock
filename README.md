@@ -2,7 +2,7 @@
 
 Flutter 接口 Mock 与请求抓包工具。目标 App 主动通过 WebSocket 连接本地 relay，上报经过适配器的请求；Web 控制台连接同一个 relay，选择设备后编辑并下发 Mock 规则。规则在 App 内匹配，未命中的请求继续访问真实业务 API。
 
-当前可行性测试只保留 Web：`local_mock_desktop` 是 Flutter Web 控制台，不再提供 macOS / Windows 应用，也不使用独立的 `local_mock_server` 项目。
+当前可行性测试只保留 Web：`local_mock_client` 是 Flutter Web 控制台，不再提供 macOS / Windows 应用，也不使用独立的 `local_mock_server` 项目。
 
 ## 构建模式
 
@@ -16,7 +16,7 @@ Flutter 接口 Mock 与请求抓包工具。目标 App 主动通过 WebSocket �
 
 | 目录 | 说明 |
 | --- | --- |
-| [`local_mock_desktop`](local_mock_desktop/README.md) | Flutter Web 控制台、WebSocket relay 启动脚本、规则编辑和抓包界面 |
+| [`local_mock_client`](local_mock_client/README.md) | Flutter Web 控制台、WebSocket relay 启动脚本、规则编辑和抓包界面 |
 | [`local_mock_package/local_mock_transport`](local_mock_package/local_mock_transport/README.md) | App 与 Web 控制台共用的 WebSocket 协议 |
 | [`local_mock_package/local_mock_core`](local_mock_package/local_mock_core/README.md) | 规则模型、匹配、流量记录和 App 连接入口 |
 | [`local_mock_package/local_mock_dio`](local_mock_package/local_mock_dio/README.md) | Dio 4.x / 5.x 适配器 |
@@ -24,12 +24,12 @@ Flutter 接口 Mock 与请求抓包工具。目标 App 主动通过 WebSocket �
 
 ## 本地可行性测试
 
-Flutter Web 页面本身不能监听来自手机的 WebSocket，所以不能把 `flutter run -d chrome` 的开发服务器直接当成 App 接入端。项目提供了同一 `local_mock_desktop` 目录下的 Dart relay 启动脚本；它同时托管 `build/web` 和 `/ws/app`、`/ws/console`，不是独立的服务项目。
+Flutter Web 页面本身不能监听来自手机的 WebSocket，所以不能把 `flutter run -d chrome` 的开发服务器直接当成 App 接入端。项目提供了同一 `local_mock_client` 目录下的 Dart relay 启动脚本；它同时托管 `build/web` 和 `/ws/app`、`/ws/console`，不是独立的服务项目。
 
 终端一：构建 Web 并启动 relay：
 
 ```bash
-cd local_mock_desktop
+cd local_mock_client
 flutter pub get
 flutter build web --no-web-resources-cdn
 dart run tool/relay_host.dart 9090
@@ -148,7 +148,7 @@ flutter build apk --profile \
 ## 验证
 
 ```bash
-cd local_mock_desktop
+cd local_mock_client
 flutter analyze
 flutter test
 flutter build web --no-web-resources-cdn

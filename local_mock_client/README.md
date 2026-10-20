@@ -1,4 +1,4 @@
-# local_mock_desktop
+# local_mock_client
 
 Flutter Web 控制台，复用规则编辑、抓包详情、从请求生成规则等界面。目标 App 主动连接同一个 WebSocket relay，控制台选择设备后下发规则。
 
@@ -11,7 +11,7 @@ Flutter Web 控制台，复用规则编辑、抓包详情、从请求生成规�
 终端一：
 
 ```bash
-cd local_mock_desktop
+cd local_mock_client
 flutter pub get
 flutter build web --no-web-resources-cdn
 dart run tool/relay_host.dart 9090

@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:local_mock_core/local_mock_core.dart';
-import 'package:local_mock_desktop/src/mock_connection.dart';
+import 'package:local_mock_client/src/mock_connection.dart';
 import '../tool/relay_host.dart';
 import 'package:local_mock_transport/local_mock_transport.dart';
 

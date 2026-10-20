@@ -1,4 +1,4 @@
-name: local_mock_desktop
+name: local_mock_client
 description: Web controller for app-initiated local_mock sessions.
 publish_to: none
 version: 0.3.0+1

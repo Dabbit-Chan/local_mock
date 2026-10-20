@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:local_mock_desktop/src/capture_panel.dart';
+import 'package:local_mock_client/src/capture_panel.dart';
 
 Map<String, dynamic> entry(
   String path, {

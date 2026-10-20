@@ -1,11 +1,11 @@
 ---
 name: local-mock-rules
-description: 为 local_mock 生成 Mock 规则 JSON 对象（粘贴到 local_mock_desktop 编辑器的规则数组中下发到 App）。当用户要求 mock 接口、构造假数据、模拟错误码 / 超时 / 空列表等场景，或要求编写、修改、校验 local_mock 规则时使用。
+description: 为 local_mock 生成 Mock 规则 JSON 对象（粘贴到 local_mock_client 编辑器的规则数组中下发到 App）。当用户要求 mock 接口、构造假数据、模拟错误码 / 超时 / 空列表等场景，或要求编写、修改、校验 local_mock 规则时使用。
 ---
 
 # 生成 local_mock 规则
 
-产出物是一条或多条规则的 JSON 对象（map），不要包裹成 JSON 数组（list）。用户会把它们粘贴到 local_mock_desktop 编辑器已有的规则数组 `[...]` 中，点击“应用到手机”后生效。
+产出物是一条或多条规则的 JSON 对象（map），不要包裹成 JSON 数组（list）。用户会把它们粘贴到 local_mock_client 编辑器已有的规则数组 `[...]` 中，点击“应用到手机”后生效。
 
 ## 流程
 

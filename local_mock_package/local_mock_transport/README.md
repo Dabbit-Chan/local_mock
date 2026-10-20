@@ -1,6 +1,6 @@
 # local_mock_transport
 
-不依赖 Flutter 的 App / Web 控制台通信包。当前用于本地可行性测试：relay 由 `local_mock_desktop/tool/relay_host.dart` 启动，不是独立服务项目。
+不依赖 Flutter 的 App / Web 控制台通信包。当前用于本地可行性测试：relay 由 `local_mock_client/tool/relay_host.dart` 启动，不是独立服务项目。
 
 - `relayUri`：将 HTTP(S) / WS(S) 地址转换为 App 或控制台 WebSocket 入口。
 - `RelayPeer`：WebSocket 连接、请求 / 响应、超时和断连清理。

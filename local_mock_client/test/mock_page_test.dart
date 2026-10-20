@@ -2,8 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:local_mock_desktop/main.dart';
-import 'package:local_mock_desktop/src/mock_connection.dart';
+import 'package:local_mock_client/main.dart';
+import 'package:local_mock_client/src/mock_connection.dart';
 
 class _RecordingConnection extends MockConnection {
   final updates = <List<dynamic>>[];

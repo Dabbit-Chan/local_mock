@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:local_mock_desktop/src/mock_connection.dart';
+import 'package:local_mock_client/src/mock_connection.dart';
 import 'package:local_mock_transport/local_mock_transport.dart';
 
 Future<void> waitUntil(bool Function() condition) async {
