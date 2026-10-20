@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 
 import 'package:flutter/foundation.dart';
+import 'package:local_mock_transport/local_mock_transport.dart';
 
 import 'mock_registry.dart';
 import 'mock_rule.dart';
@@ -16,13 +17,81 @@ import 'traffic.dart';
 /// view shown by the desktop app.
 abstract final class LocalMock {
   static final _registry = MockRegistry();
-  static final _traffic = TrafficRecorder();
+  static final _traffic = TrafficRecorder(
+    maxEntries: 500,
+    onEntry: (entry) {
+      _agent?.report(entry.toJson());
+    },
+  );
+  static LocalMockAgent? _agent;
+  static Uri? _serverUri;
+
+  /// Enabled in Debug and Profile; disabled in Release.
+  static const enabled = !kReleaseMode;
+
+  /// Starts an outbound relay connection. Returns immediately; unavailable
+  /// servers are retried in the background and never block business requests.
+  /// Use a unique, stable deviceId for each app installation/isolate.
+  static bool connect({
+    required String serverUrl,
+    required String deviceId,
+    String? deviceName,
+  }) {
+    if (!enabled) return false;
+    if (deviceId.trim().isEmpty) {
+      throw ArgumentError('deviceId must not be empty');
+    }
+    final uri = relayUri(serverUrl, 'app');
+    disconnect();
+    _serverUri = uri;
+    _agent = LocalMockAgent(
+      serverUrl: serverUrl,
+      deviceId: deviceId,
+      deviceName: deviceName ?? deviceId,
+      snapshot: () => {..._registry.state, ..._trafficSnapshot(0)},
+      onCommand: (method, args) {
+        switch (method) {
+          case 'replaceRules':
+            _registry.replace(args['rules']);
+          case 'clear':
+            _registry.clear();
+          case 'clearTraffic':
+            _traffic.clear();
+          case 'getState':
+            break;
+          default:
+            throw FormatException('Unknown command: $method');
+        }
+        return _registry.state;
+      },
+    )..start();
+    return true;
+  }
+
+  static bool get connected => _agent?.connected ?? false;
+
+  /// Stops reporting; rules remain in memory until explicitly cleared.
+  static void disconnect() {
+    _agent?.stop();
+    _agent = null;
+    _serverUri = null;
+  }
+
+  static bool _isControlRequest(Uri uri) =>
+      _serverUri != null &&
+      uri.host == _serverUri!.host &&
+      uri.port ==
+          (_serverUri!.hasPort
+              ? _serverUri!.port
+              : (_serverUri!.scheme == 'wss' ? 443 : 80)) &&
+      uri.path == _serverUri!.path;
   static bool _registered = false;
 
   /// Registers the VM Service extensions once per isolate.
-  /// Returns false outside Debug mode (nothing is registered).
+  /// Returns false when disabled. VM extensions are only registered in Debug.
   static bool ensureInitialized() {
-    if (!kDebugMode) return false;
+    if (!enabled) return false;
+    if (!kDebugMode) return true;
     if (!_registered) {
       for (final method in [
         LocalMockProtocol.replaceRules,
@@ -39,14 +108,14 @@ abstract final class LocalMock {
   }
 
   /// First enabled rule matching [method] and [uri], or null.
-  /// Always null outside Debug mode.
+  /// Always null when disabled.
   static MockRule? match(String method, Uri uri) =>
-      kDebugMode ? _registry.match(method, uri) : null;
+      enabled && !_isControlRequest(uri) ? _registry.match(method, uri) : null;
 
   /// Starts recording one request for the capture view. Returns null outside
-  /// Debug mode. Call [TrafficRecording.finish] or [fail] once it settles.
+  /// enabled modes. Call [TrafficRecording.finish] or [TrafficRecording.fail] once it settles.
   static TrafficRecording? beginTraffic(String method, Uri uri) =>
-      kDebugMode ? _traffic.begin(method, uri) : null;
+      enabled && !_isControlRequest(uri) ? _traffic.begin(method, uri) : null;
 
   /// Replaces rules without the VM Service, for adapter tests.
   @visibleForTesting

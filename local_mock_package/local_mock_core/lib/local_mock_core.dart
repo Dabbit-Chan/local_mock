@@ -1,5 +1,5 @@
-/// HTTP-client-agnostic core: rules, matching, traffic capture, and VM
-/// Service extensions. Adapters (local_mock_dio, local_mock_http) call
+/// HTTP-client-agnostic core: rules, matching, traffic capture, and outbound
+/// app reporting. Adapters (local_mock_dio, local_mock_http) call
 /// [LocalMock.match] and [LocalMock.beginTraffic].
 library;
 

@@ -1,0 +1,4 @@
+# Local workspace resolution.
+dependency_overrides:
+  local_mock_transport:
+    path: ../local_mock_transport

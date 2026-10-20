@@ -94,7 +94,7 @@ class CapturePanel extends StatefulWidget {
   final bool connected;
   final bool ready;
 
-  /// False when the selected isolate runs an app older than protocol v2.
+  /// Whether the selected device supports capture.
   final bool available;
   final bool live;
 
@@ -175,13 +175,13 @@ class _CapturePanelState extends State<CapturePanel> {
     if (!widget.connected && widget.entries.isEmpty) {
       return _HintState(
         icon: Icons.link_off,
-        text: '未连接。先在上方连接 App，App 内经过 local_mock 适配器的请求会显示在这里。',
+        text: '未连接。先在上方连接服务并选择设备，App 内经过 local_mock 适配器的请求会显示在这里。',
       );
     }
     if (widget.connected && !widget.ready && widget.entries.isEmpty) {
       return const _HintState(
         icon: Icons.hourglass_top,
-        text: '等待目标就绪…（发现 isolate 后自动选中，或从下拉框选择）',
+        text: '等待目标就绪…（App 连接服务后，从下拉框选择在线设备）',
       );
     }
     if (widget.connected &&
@@ -191,8 +191,8 @@ class _CapturePanelState extends State<CapturePanel> {
       return _HintState(
         icon: Icons.system_update,
         text:
-            'App 端 local_mock 版本过旧（协议 v1），不支持抓包。'
-            '请将业务 App 的 local_mock_dio / local_mock_http 升级到 0.2.0+ 后重新运行。',
+            'App 未启用抓包或 local_mock 版本过旧。'
+            '请升级业务 App 的 local_mock_dio / local_mock_http 并启用抓包后重新运行。',
         iconColor: scheme.error,
       );
     }

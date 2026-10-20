@@ -1,6 +1,6 @@
 # local_mock_dio
 
-local_mock 的 Dio 适配器，同一份代码同时支持 Dio 4.x（>=4.0.6）和 Dio 5.x。仅在 Debug 模式生效。
+local_mock 的 Dio 适配器，同一份代码同时支持 Dio 4.x（>=4.0.6）和 Dio 5.x。在 Debug 和 Profile 模式默认生效，Release 始终禁用。
 
 ## 安装
 
@@ -13,13 +13,17 @@ dependencies:
       path: local_mock_package/local_mock_dio
 
 dependency_overrides:
+  local_mock_transport:
+    git:
+      url: https://github.com/Dabbit-Chan/local_mock.git
+      path: local_mock_package/local_mock_transport
   local_mock_core:
     git:
       url: https://github.com/Dabbit-Chan/local_mock.git
       path: local_mock_package/local_mock_core
 ```
 
-`local_mock_core` 尚未发布到 pub.dev，需要通过 `dependency_overrides` 指定来源（git 或本地 `path`）。
+`local_mock_core` 和 `local_mock_transport` 尚未发布到 pub.dev，需要通过 `dependency_overrides` 同时指定来源（git 或本地 `path`）。服务端与控制台启动方式见[根 README](../../README.md)。
 
 ## 使用
 
@@ -31,8 +35,10 @@ dio.interceptors.add(AuthInterceptor()); // 会修改 URL / method 的拦截器�
 LocalMockDio.attach(dio);                // 再挂 local_mock
 ```
 
-- `LocalMockDio.attach` 非 Debug 模式下返回 `false` 且不做任何事；重复调用不会重复添加。
-- 也可以手动添加 `LocalMockInterceptor()`，它同样会注册 VM Service 扩展。
+- `LocalMockDio.attach` 在禁用模式下返回 `false`；重复调用不会重复添加。
+- 调用 `LocalMock.connect(serverUrl: ..., deviceId: ...)` 开始主动连接 relay。当前可行性测试不需要访问令牌。
+- Debug 和 Profile 默认启用，无需额外启用参数。
+- 也可以手动添加 `LocalMockInterceptor()`，禁用模式下只透传请求。
 - 拦截器在 `onRequest` 中匹配，所以需要排在会改写请求 URL / method 的拦截器之后。
 
 ## 响应行为
@@ -50,7 +56,7 @@ LocalMockDio.attach(dio);                // 再挂 local_mock
 
 - 未命中规则的请求在 `onResponse` / `onError` 里记录真实结果；被后续拦截器提前 resolve 的请求不记录。
 - 请求体：`String` / JSON 可编码对象直接记录；`FormData` 只记录字段与文件数量。
-- 仅 Debug 模式生效；需要将桌面端同步升级到 0.2.0+（协议 v2）。
+- 在 Debug 和 Profile 模式记录；连接后实时上报到服务端，再由 Web / 桌面控制台展示。
 
 ## 测试
 

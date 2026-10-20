@@ -1,6 +1,6 @@
 name: local_mock_http
-description: Debug-only dart:io HttpClient mocking for local_mock via HttpOverrides. Works with package:http and other dart:io based clients.
-version: 0.2.0
+description: dart:io HttpClient mock rules and capture for Debug and Profile apps.
+version: 0.3.0
 
 environment:
   sdk: '>=3.8.0 <4.0.0'
@@ -9,7 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  local_mock_core: ^0.2.0
+  local_mock_core: ^0.3.0
 
 dev_dependencies:
   flutter_test:

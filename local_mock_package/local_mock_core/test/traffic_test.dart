@@ -112,6 +112,19 @@ void main() {
     expect(restored.statusCode, 404);
   });
 
+  test('bounded buffers still report evicted requests exactly once', () {
+    final reported = <TrafficEntry>[];
+    final bounded = TrafficRecorder(maxEntries: 2, onEntry: reported.add);
+    for (var i = 0; i < 3; i++) {
+      bounded.begin('GET', Uri.parse('https://a.test/$i')).finish();
+    }
+    expect(bounded.since(0).map((e) => e.path), ['/1', '/2']);
+    expect(reported.map((e) => e.path), ['/0', '/1', '/2']);
+    bounded.clear();
+    bounded.begin('GET', Uri.parse('https://a.test/after-clear')).finish();
+    expect(bounded.since(0).single.revision, 4);
+  });
+
   test('LocalMock records traffic in debug mode through debug hooks', () {
     final traffic = LocalMock.beginTraffic(
       'GET',

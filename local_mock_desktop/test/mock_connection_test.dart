@@ -1,149 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:local_mock_core/local_mock_core.dart';
 import 'package:local_mock_desktop/src/mock_connection.dart';
-
-/// Exercises the wire client without starting a business app or real Dart VM.
-class FakeVm {
-  late HttpServer server;
-  final sockets = <WebSocket>[];
-  bool extensionAvailable = true;
-  bool captureAvailable = true;
-  bool rejectReplacement = false;
-  String isolateId = 'isolates/1';
-  int version = LocalMockProtocol.version;
-  List<dynamic> rules = [];
-
-  /// Captured entries with monotonic revisions, like TrafficRecorder.
-  final traffic = <Map<String, dynamic>>[];
-  int trafficRevision = 0;
-
-  String get address => 'http://127.0.0.1:${server.port}/token=/';
-
-  Future<void> start() async {
-    server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    server.listen((request) async {
-      if (request.uri.path != '/token=/ws') {
-        request.response.statusCode = 403;
-        await request.response.close();
-        return;
-      }
-      final socket = await WebSocketTransformer.upgrade(request);
-      sockets.add(socket);
-      socket.listen((message) {
-        final request = jsonDecode(message as String) as Map<String, dynamic>;
-        final method = request['method'];
-        final params = request['params'] as Map<String, dynamic>;
-        Map<String, dynamic> result;
-        switch (method) {
-          case 'getVM':
-            result = {
-              'type': 'VM',
-              'isolates': [
-                {
-                  'type': '@Isolate',
-                  'id': isolateId,
-                  'name': 'main',
-                  'number': '1',
-                },
-              ],
-            };
-          case 'getIsolate':
-            result = {
-              'type': 'Isolate',
-              'id': isolateId,
-              'name': 'main',
-              'number': '1',
-              'extensionRPCs': extensionAvailable
-                  ? [
-                      LocalMockProtocol.getState,
-                      LocalMockProtocol.replaceRules,
-                      LocalMockProtocol.clear,
-                      if (captureAvailable) ...[
-                        LocalMockProtocol.getTraffic,
-                        LocalMockProtocol.clearTraffic,
-                      ],
-                    ]
-                  : [],
-            };
-          case LocalMockProtocol.replaceRules:
-            if (rejectReplacement) {
-              socket.add(
-                jsonEncode({
-                  'jsonrpc': '2.0',
-                  'id': request['id'],
-                  'error': {'code': -32602, 'message': 'invalid rules'},
-                }),
-              );
-              return;
-            }
-            expect(params['protocolVersion'], '${LocalMockProtocol.version}');
-            rules = jsonDecode(params['rules'] as String) as List;
-            result = state;
-          case LocalMockProtocol.clear:
-            rules = [];
-            result = state;
-          case LocalMockProtocol.getState:
-            result = state;
-          case LocalMockProtocol.getTraffic:
-            final since = int.parse(params['sinceRevision'] as String? ?? '0');
-            result = {
-              'protocolVersion': version,
-              'trafficRevision': trafficRevision,
-              'entries': [
-                for (final entry in traffic)
-                  if (entry['revision'] as int > since) entry,
-              ],
-            };
-          case LocalMockProtocol.clearTraffic:
-            traffic.clear();
-            result = {
-              'protocolVersion': version,
-              'trafficRevision': trafficRevision,
-              'entries': [],
-            };
-          default:
-            throw StateError('Unexpected RPC: $method');
-        }
-        socket.add(
-          jsonEncode({'jsonrpc': '2.0', 'id': request['id'], 'result': result}),
-        );
-      });
-    });
-  }
-
-  Map<String, dynamic> get state => {
-    'protocolVersion': version,
-    'revision': 1,
-    'rules': rules,
-  };
-
-  /// Appends one captured request, like an adapter would.
-  void emitTraffic(String path, {int? statusCode, bool mocked = false}) {
-    trafficRevision++;
-    traffic.add({
-      'revision': trafficRevision,
-      'startedAt': 1710000000000 + trafficRevision * 1000,
-      'durationMs': 42,
-      'mocked': mocked,
-      'method': 'GET',
-      'uri': 'https://api.test$path?token=1',
-      'host': 'api.test',
-      'path': path,
-      'statusCode': statusCode,
-      'responseBody': '{"source":"backend"}',
-    });
-  }
-
-  Future<void> close() async {
-    for (final socket in sockets) {
-      await socket.close();
-    }
-    await server.close(force: true);
-  }
-}
+import '../tool/relay_host.dart';
+import 'package:local_mock_transport/local_mock_transport.dart';
 
 String ruleJson(String name) => jsonEncode([
   {
@@ -155,189 +17,312 @@ String ruleJson(String name) => jsonEncode([
 ]);
 
 Future<void> waitUntil(bool Function() condition) async {
-  final deadline = DateTime.now().add(const Duration(seconds: 6));
+  final deadline = DateTime.now().add(const Duration(seconds: 10));
   while (!condition()) {
     if (DateTime.now().isAfter(deadline)) {
-      fail('Timed out waiting for VM client state');
+      fail('Timed out waiting for relay state');
     }
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+}
+
+class TestApp {
+  TestApp(String address, String id) {
+    agent = LocalMockAgent(
+      serverUrl: address,
+
+      deviceId: id,
+      deviceName: id,
+      reconnectDelay: const Duration(milliseconds: 40),
+      snapshot: () => {'rules': rules, 'entries': traffic},
+      onCommand: (method, args) async {
+        if (delay != null) await delay!.future;
+        if (reject && method == 'replaceRules') {
+          throw StateError('Invalid rules');
+        }
+        switch (method) {
+          case 'replaceRules':
+            rules = List.of(args['rules'] as List);
+          case 'clear':
+            rules = [];
+          case 'clearTraffic':
+            traffic.clear();
+        }
+        return {'rules': rules};
+      },
+    );
+  }
+  late final LocalMockAgent agent;
+  List<dynamic> rules = [];
+  bool reject = false;
+  Completer<void>? delay;
+  int revision = 0;
+  final traffic = <Map<String, dynamic>>[];
+  void emit(String path) {
+    final entry = <String, dynamic>{
+      'revision': ++revision,
+      'method': 'GET',
+      'uri': 'https://api.test$path',
+      'path': path,
+      'startedAt': 1710000000000,
+      'durationMs': 1,
+      'mocked': false,
+    };
+    traffic.add(entry);
+    agent.report(entry);
   }
 }
 
 void main() {
-  late FakeVm vm;
+  late LocalMockRelay server;
   late MockConnection connection;
+  final apps = <TestApp>[];
+  late String address;
 
   setUp(() async {
-    vm = FakeVm();
-    await vm.start();
+    server = LocalMockRelay();
+    await server.start(port: 0);
+    address = 'http://127.0.0.1:${server.port}';
     connection = MockConnection();
   });
-
   tearDown(() async {
+    LocalMock.disconnect();
+    LocalMock.debugClear();
+    LocalMock.debugClearTraffic();
     connection.dispose();
-    await vm.close();
+    for (final app in apps) {
+      app.agent.stop();
+    }
+    apps.clear();
+    await server.close();
   });
 
-  test('connect automatically applies all current desktop rules', () async {
-    await connection.updateRules(ruleJson('draft'));
-    await connection.connect(vm.address);
-    expect((vm.rules.single as Map)['body'], {'name': 'draft'});
-    connection.disconnect();
-    await connection.updateRules(ruleJson('offline edit'));
-    await connection.connect(vm.address);
-    expect((vm.rules.single as Map)['body'], {'name': 'offline edit'});
-  });
-
-  test('rapid edits eventually apply the latest rules', () async {
-    await connection.connect(vm.address);
-    final first = connection.updateRules(ruleJson('first'));
-    await connection.updateRules(ruleJson('latest'));
-    await first;
-    expect((vm.rules.single as Map)['body'], {'name': 'latest'});
-  });
+  Future<TestApp> startApp(String id) async {
+    final app = TestApp(address, id);
+    apps.add(app);
+    app.agent.start();
+    await waitUntil(() => app.agent.connected);
+    return app;
+  }
 
   test(
-    'disconnect retains capture until reconnect clears both buffers',
+    'real SDK reports traffic, receives rules and excludes control traffic',
     () async {
-      await connection.connect(vm.address);
-      connection.setCaptureLive(true);
-      vm.emitTraffic('/retained');
-      await waitUntil(() => connection.traffic.length == 1);
-      connection.disconnect();
-      expect(connection.traffic.single['path'], '/retained');
-      expect(vm.traffic, hasLength(1));
-      await connection.connect(vm.address);
-      expect(connection.traffic, isEmpty);
-      expect(vm.traffic, isEmpty);
-      vm.emitTraffic('/new');
-      await waitUntil(() => connection.traffic.length == 1);
-      expect(connection.traffic.single['path'], '/new');
-    },
-  );
-
-  test('connect, apply, acknowledge and clear rules', () async {
-    await connection.connect(vm.address);
-    expect(connection.ready, isTrue);
-    expect(connection.selectedId, 'isolates/1');
-    await connection.apply(ruleJson('first'));
-    expect(connection.remoteRuleCount, 1);
-    expect((vm.rules.single as Map)['body'], {'name': 'first'});
-    await connection.clear();
-    expect(vm.rules, isEmpty);
-    expect(connection.remoteRuleCount, 0);
-  });
-
-  test(
-    'discovers extensions registered after the initial connection',
-    () async {
-      vm.extensionAvailable = false;
-      await connection.connect(vm.address);
-      expect(connection.ready, isFalse);
-      vm.extensionAvailable = true;
-      await waitUntil(() => connection.ready);
-    },
-  );
-
-  test(
-    'hot restart restores acknowledged rules into replacement isolate',
-    () async {
-      await connection.connect(vm.address);
-      await connection.apply(ruleJson('first'));
-      vm.rules = [];
-      vm.isolateId = 'isolates/2';
-      await waitUntil(() => connection.selectedId == 'isolates/2');
-      expect((vm.rules.single as Map)['body'], {'name': 'first'});
-    },
-  );
-
-  test(
-    'failed application does not overwrite last acknowledged rules',
-    () async {
-      await connection.connect(vm.address);
-      await connection.apply(ruleJson('first'));
-      vm.rejectReplacement = true;
-      await expectLater(
-        connection.apply(ruleJson('rejected')),
-        throwsException,
+      expect(
+        LocalMock.connect(
+          serverUrl: address,
+          deviceId: 'sdk',
+          deviceName: 'QA phone',
+        ),
+        isTrue,
       );
-      vm.rejectReplacement = false;
-      vm.rules = [];
-      vm.isolateId = 'isolates/2';
-      await waitUntil(() => connection.selectedId == 'isolates/2');
-      expect((vm.rules.single as Map)['body'], {'name': 'first'});
+      await waitUntil(() => LocalMock.connected);
+      await connection.connect(address);
+      await waitUntil(() => connection.ready);
+      await connection.apply(ruleJson('QA'));
+      expect(
+        LocalMock.match('GET', Uri.parse('https://api.test/api/profile'))?.body,
+        {'name': 'QA'},
+      );
+      LocalMock.beginTraffic(
+        'GET',
+        Uri.parse('https://api.test/api/profile'),
+      )!.finish(statusCode: 200, mocked: true, body: '{"name":"QA"}');
+      await waitUntil(() => connection.traffic.length == 1);
+      expect(connection.traffic.single['mocked'], isTrue);
+      expect(
+        LocalMock.beginTraffic('GET', Uri.parse('$address/ws/app')),
+        isNull,
+      );
+      await connection.clearTraffic();
+      expect(connection.traffic, isEmpty);
+      expect(LocalMock.debugTrafficEntries(), isEmpty);
+      await connection.clear();
+      expect(
+        LocalMock.match('GET', Uri.parse('https://api.test/api/profile')),
+        isNull,
+      );
     },
   );
 
-  test('disconnect retains remote rules; reconnect restores them', () async {
-    await connection.connect(vm.address);
-    await connection.apply(ruleJson('first'));
-    connection.disconnect();
-    expect(connection.connected, isFalse);
-    expect(vm.rules, hasLength(1));
-    await connection.connect(vm.address);
+  test(
+    'a console can connect before an app and discovers it automatically',
+    () async {
+      await connection.connect(address);
+      expect(connection.ready, isFalse);
+      await startApp('phone');
+      await waitUntil(() => connection.ready);
+      expect(connection.selectedId, 'phone');
+    },
+  );
+
+  test(
+    'switching devices loads their rules without overwriting them',
+    () async {
+      final a = await startApp('a');
+      final b = await startApp('b');
+      await connection.connect(address);
+      await waitUntil(() => connection.targets.length == 2);
+      await connection.selectTarget('a');
+      await connection.apply(ruleJson('A'));
+      a.emit('/a');
+      b.emit('/b');
+      await waitUntil(() => connection.traffic.length == 1);
+      await connection.selectTarget('b');
+      expect(connection.rules, isEmpty);
+      expect(connection.traffic.single['path'], '/b');
+      await connection.apply(ruleJson('B'));
+      await connection.selectTarget('a');
+      expect(connection.rules.single['body'], {'name': 'A'});
+      expect((b.rules.single as Map)['body'], {'name': 'B'});
+      expect(connection.traffic.single['path'], '/a');
+    },
+  );
+
+  test('rapid edits converge to the latest acknowledged version', () async {
+    final app = await startApp('a');
+    await connection.connect(address);
+    app.delay = Completer<void>();
+    final first = connection.updateRules(ruleJson('first'));
+    final latest = connection.updateRules(ruleJson('latest'));
+    app.delay!.complete();
+    await Future.wait([first, latest]);
+    expect((app.rules.single as Map)['body'], {'name': 'latest'});
     expect(connection.remoteRuleCount, 1);
   });
 
-  test('incompatible protocol is never modified', () async {
-    vm.version = 999;
-    await connection.connect(vm.address);
-    expect(connection.ready, isFalse);
-    expect(connection.status, contains('协议版本不兼容'));
-    expect(vm.rules, isEmpty);
+  test(
+    'reconnecting an app restores acknowledged rules and deduplicates traffic',
+    () async {
+      final app = await startApp('a');
+      await connection.connect(address);
+      await connection.apply(ruleJson('saved'));
+      app.emit('/one');
+      await waitUntil(() => connection.traffic.length == 1);
+      app.agent.stop();
+      await waitUntil(() => !connection.ready);
+      app.rules = [];
+      app.agent.start();
+      await waitUntil(() => connection.ready && app.rules.isNotEmpty);
+      expect((app.rules.single as Map)['body'], {'name': 'saved'});
+      app.emit('/two');
+      await waitUntil(() => connection.traffic.length == 2);
+      expect(connection.traffic.map((e) => e['path']), ['/one', '/two']);
+    },
+  );
+
+  test('failed rules never replace the last acknowledged rules', () async {
+    final app = await startApp('a');
+    await connection.connect(address);
+    await connection.apply(ruleJson('saved'));
+    app.reject = true;
+    await expectLater(connection.apply(ruleJson('rejected')), throwsStateError);
+    app.reject = false;
+    connection.disconnect();
+    await connection.connect(address);
+    expect(connection.rules.single['body'], {'name': 'saved'});
   });
 
-  test('older app protocol is reported clearly', () async {
-    vm.version = 1;
-    await connection.connect(vm.address);
-    expect(connection.ready, isFalse);
-    expect(connection.status, contains('版本过旧'));
-    expect(vm.rules, isEmpty);
-  });
-
-  test('live capture polls only new traffic entries', () async {
-    await connection.connect(vm.address);
-    expect(connection.captureAvailable, isTrue);
-
-    connection.setCaptureLive(true);
-    vm.emitTraffic('/api/a');
+  test('a restarted app resets the traffic revision namespace', () async {
+    final app = await startApp('a');
+    await connection.connect(address);
+    app.emit('/old');
     await waitUntil(() => connection.traffic.length == 1);
-    expect(connection.traffic.single['path'], '/api/a');
-
-    vm.emitTraffic('/api/b');
-    await waitUntil(() => connection.traffic.length == 2);
-    expect(connection.traffic.map((entry) => entry['path']), [
-      '/api/a',
-      '/api/b',
-    ]);
+    app.agent.stop();
+    await waitUntil(() => !connection.ready);
+    final replacement = await startApp('a');
+    await waitUntil(() => connection.ready);
+    replacement.emit('/new');
+    await waitUntil(
+      () =>
+          connection.traffic.length == 1 &&
+          connection.traffic.single['path'] == '/new',
+    );
   });
 
-  test('clearTraffic empties the app buffer and the local list', () async {
-    await connection.connect(vm.address);
-    connection.setCaptureLive(true);
-    vm.emitTraffic('/api/a');
+  test('console disconnect preserves app rules and server traffic', () async {
+    final app = await startApp('a');
+    await connection.connect(address);
+    await connection.apply(ruleJson('saved'));
+    app.emit('/retained');
     await waitUntil(() => connection.traffic.length == 1);
-
-    await connection.clearTraffic();
-    expect(connection.traffic, isEmpty);
-    expect(vm.traffic, isEmpty);
-
-    // The cursor survives the clear; later entries are still fetched.
-    vm.emitTraffic('/api/c');
-    await waitUntil(() => connection.traffic.length == 1);
-    expect(connection.traffic.single['path'], '/api/c');
+    connection.disconnect();
+    expect(app.rules, hasLength(1));
+    expect(connection.traffic, hasLength(1));
+    await connection.connect(address);
+    expect(connection.traffic.single['path'], '/retained');
   });
 
-  test('capture is unavailable on apps without traffic extensions', () async {
-    vm.captureAvailable = false;
-    await connection.connect(vm.address);
-    expect(connection.ready, isTrue);
-    expect(connection.captureAvailable, isFalse);
+  test(
+    'an unavailable backend is retried without uncaught socket errors',
+    () async {
+      final port = server.port;
+      await server.close();
+      final app = TestApp(address, 'retry');
+      apps.add(app);
+      app.agent.start();
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(app.agent.connected, isFalse);
+      server = LocalMockRelay();
+      await server.start(port: port);
+      await waitUntil(() => app.agent.connected);
+      await connection.connect(address);
+      expect(connection.selectedId, 'retry');
+      expect(connection.ready, isTrue);
+    },
+  );
 
-    connection.setCaptureLive(true);
-    vm.emitTraffic('/api/a');
-    await Future<void>.delayed(const Duration(milliseconds: 300));
-    expect(connection.traffic, isEmpty);
-    expect(vm.traffic, hasLength(1));
+  test(
+    'two live apps cannot accidentally share the same device identity',
+    () async {
+      final app = await startApp('unique');
+      final duplicate = TestApp(address, 'unique');
+      apps.add(duplicate);
+      duplicate.agent.start();
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(duplicate.agent.connected, isFalse);
+      expect(app.agent.connected, isTrue);
+      await connection.connect(address);
+      await connection.apply(ruleJson('original'));
+      expect((app.rules.single as Map)['body'], {'name': 'original'});
+      expect(duplicate.rules, isEmpty);
+    },
+  );
+
+  test(
+    'disconnecting a device fails pending edits and releases busy state',
+    () async {
+      final app = await startApp('a');
+      await connection.connect(address);
+      await connection.apply(ruleJson('saved'));
+      app.delay = Completer<void>();
+      final edit = connection.apply(ruleJson('interrupted'));
+      final failed = expectLater(edit, throwsStateError);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      app.agent.stop();
+      await failed;
+      expect(connection.working, isFalse);
+      app.delay!.complete();
+      app.delay = null;
+      app.agent.start();
+      await waitUntil(() => connection.ready);
+      await connection.apply(ruleJson('recovered'));
+      expect((app.rules.single as Map)['body'], {'name': 'recovered'});
+    },
+  );
+
+  test('server and console keep the latest 500 requests', () async {
+    final app = await startApp('a');
+    await connection.connect(address);
+    for (var i = 0; i < 510; i++) {
+      app.emit('/$i');
+    }
+    await waitUntil(
+      () =>
+          connection.traffic.isNotEmpty &&
+          connection.traffic.last['path'] == '/509',
+    );
+    expect(connection.traffic, hasLength(500));
+    expect(connection.traffic.first['path'], '/10');
   });
 }

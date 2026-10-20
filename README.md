@@ -1,64 +1,127 @@
 # local_mock
 
-Flutter 调试期接口 Mock 工具。桌面端通过 Dart VM Service 把 Mock 规则直接下发到运行中的 App，不需要代理和证书，也不需要 Hot Reload，规则在下一次请求时生效。同时提供抓包能力：App 内经过适配器的请求会实时同步到桌面端，可以从单条请求一键生成 Mock 规则。
+Flutter 接口 Mock 与请求抓包工具。目标 App 主动通过 WebSocket 连接本地 relay，上报经过适配器的请求；Web 控制台连接同一个 relay，选择设备后编辑并下发 Mock 规则。规则在 App 内匹配，未命中的请求继续访问真实业务 API。
 
-所有能力只在 Debug 模式下启用。Profile / Release 构建中不会注册 VM Service 扩展，也不会拦截任何请求。
+当前可行性测试只保留 Web：`local_mock_desktop` 是 Flutter Web 控制台，不再提供 macOS / Windows 应用，也不使用独立的 `local_mock_server` 项目。
+
+## 构建模式
+
+| 目标 App 模式 | 行为 |
+| --- | --- |
+| Debug | 默认启用拦截与记录；调用 `LocalMock.connect` 后主动连接 |
+| Profile | 默认启用拦截与记录；调用 `LocalMock.connect` 后主动连接 |
+| Release | 始终禁用 |
 
 ## 仓库结构
 
 | 目录 | 说明 |
 | --- | --- |
-| [`local_mock_desktop`](local_mock_desktop/README.md) | 桌面控制端（macOS / Windows），连接 VM Service 后编辑并下发规则 |
-| [`local_mock_package/local_mock_core`](local_mock_package/local_mock_core/README.md) | 与 HTTP 客户端无关的核心：规则模型、匹配、VM Service 扩展协议 |
-| [`local_mock_package/local_mock_dio`](local_mock_package/local_mock_dio/README.md) | Dio 4.x / 5.x 适配器（拦截器） |
-| [`local_mock_package/local_mock_http`](local_mock_package/local_mock_http/README.md) | `dart:io` `HttpClient` 适配器（`HttpOverrides`），覆盖 `package:http` 等 |
+| [`local_mock_desktop`](local_mock_desktop/README.md) | Flutter Web 控制台、WebSocket relay 启动脚本、规则编辑和抓包界面 |
+| [`local_mock_package/local_mock_transport`](local_mock_package/local_mock_transport/README.md) | App 与 Web 控制台共用的 WebSocket 协议 |
+| [`local_mock_package/local_mock_core`](local_mock_package/local_mock_core/README.md) | 规则模型、匹配、流量记录和 App 连接入口 |
+| [`local_mock_package/local_mock_dio`](local_mock_package/local_mock_dio/README.md) | Dio 4.x / 5.x 适配器 |
+| [`local_mock_package/local_mock_http`](local_mock_package/local_mock_http/README.md) | `dart:io HttpClient` / `package:http` 适配器 |
 
-## 工作原理
+## 本地可行性测试
 
-1. App 接入 `local_mock_dio` 或 `local_mock_http` 后，会在当前 isolate 注册 `ext.local_mock.getState` / `replaceRules` / `clear` / `getTraffic` / `clearTraffic` 五个 VM Service 扩展。
-2. 桌面端连接 App 的 VM Service 地址，自动发现注册了扩展的 isolate。
-3. 每次连接自动应用桌面端全部规则；新增、编辑保存和开关变更后也会自动同步，整体替换 App 内存中的规则表。命中规则的请求直接返回 Mock 响应，其余请求照常走网络。
-4. 适配器同时会把经过的每条请求（含真实响应与 Mock 响应）记录到 isolate 内的环形缓冲区；桌面端切到“抓包”页后增量拉取展示。
+Flutter Web 页面本身不能监听来自手机的 WebSocket，所以不能把 `flutter run -d chrome` 的开发服务器直接当成 App 接入端。项目提供了同一 `local_mock_desktop` 目录下的 Dart relay 启动脚本；它同时托管 `build/web` 和 `/ws/app`、`/ws/console`，不是独立的服务项目。
 
-## 快速开始
+终端一：构建 Web 并启动 relay：
 
-1. 在业务 App 中接入适配器（二选一或同时使用），详见各包 README：
+```bash
+cd local_mock_desktop
+flutter pub get
+flutter build web --no-web-resources-cdn
+dart run tool/relay_host.dart 9090
+```
 
-   ```dart
-   // Dio
-   final dio = Dio();
-   LocalMockDio.attach(dio);
+终端二：打开控制台：
 
-   // dart:io HttpClient / package:http
-   void main() {
-     LocalMockHttp.install();
-     runApp(const MyApp());
-   }
-   ```
+```text
+http://127.0.0.1:9090/
+```
 
-2. 以 Debug 模式运行 App，从 `flutter run` 输出中复制 VM Service 地址：
+终端三：你自己启动 cloudflared：
 
-   ```
-   A Dart VM Service on iPhone is available at: http://127.0.0.1:12345/xxxxxx=/
-   ```
+```bash
+cloudflared tunnel --url http://127.0.0.1:9090
+```
 
-   `http(s)://` 和 `ws(s)://` 开头的地址都可以，例如 `ws://127.0.0.1:12345/xxxxxx=/ws`，桌面端会自动转换为 WebSocket 地址并补全 `/ws`。注意要复制 VM Service 地址，不是 DevTools 页面地址。
+假设 cloudflared 输出：
 
-3. 启动桌面端，粘贴地址并连接，规则会自动应用；编辑保存后也会自动同步：
+```text
+https://example.trycloudflare.com
+```
 
-   ```bash
-   cd local_mock_desktop
-   flutter run -d macos
-   ```
+目标 App 直接使用这个 HTTPS 地址：
 
-## 抓包生成规则
+```dart
+LocalMock.connect(
+  serverUrl: 'https://example.trycloudflare.com',
+  deviceId: installationId,
+  deviceName: 'QA Android',
+);
+```
 
-连接后切换到“抓包”页，桌面端会实时同步 App 内经过 `local_mock_dio` / `local_mock_http` 的请求（未命中 Mock 规则的真实请求和 Mock 命中的请求都会记录）：
+地址会自动转换为：
 
-- 点击某条记录查看详情：完整 URL、请求体、状态码、耗时、响应体（JSON 自动格式化）。
-- 点击记录右侧的闪电按钮（或详情弹窗里的“生成 Mock 规则”），会用该请求的 method / host / path / 状态码 / 响应体预填规则编辑弹窗，确认保存后规则进入本地规则列表，连接就绪时自动应用。
-- 响应体是 JSON 时会解析为结构化 body；非 JSON 文本会作为字符串 body；二进制内容不会记录。
-- 抓包记录只存在 App 内存中，不限制条数，请求/响应体完整保留。
+```text
+App:      wss://example.trycloudflare.com/ws/app
+Web:      wss://example.trycloudflare.com/ws/console
+```
+
+**不需要访问令牌。** 这是当前本地可行性测试协议，任何能访问该隧道的人都可以连接和修改 Mock 规则，因此不要把隧道地址用于正式环境。
+
+如果只运行 `flutter run -d chrome`，它只能提供 Web 页面；要让 App 连接，必须让 cloudflared 指向 `tool/relay_host.dart` 监听的端口，而不是 Flutter 开发服务器端口。
+
+## 目标 App 接入
+
+业务 App 先按适配器 README 配置依赖。尚未发布的包需要同时指定 `local_mock_core` 和 `local_mock_transport` 的 git / path 来源，业务项目不能依赖本仓库内的 `pubspec_overrides.yaml` 自动生效。
+
+Dio 示例：
+
+```dart
+import 'package:dio/dio.dart';
+import 'package:local_mock_dio/local_mock_dio.dart';
+
+void configureQaTools(Dio dio, String installationId) {
+  LocalMockDio.attach(dio);
+  LocalMock.connect(
+    serverUrl: const String.fromEnvironment('LOCAL_MOCK_SERVER'),
+    deviceId: installationId,
+    deviceName: 'QA Android',
+  );
+}
+```
+
+使用 `package:http` / `HttpClient` 时，在创建业务客户端之前调用 `LocalMockHttp.install()`，再以相同方式调用 `LocalMock.connect(...)`。网络不可用时连接在后台重试，不阻塞业务请求；服务地址也可以由 App 的测试入口在运行时提供。
+
+Profile QA 包的构建示例：
+
+```bash
+flutter build apk --profile
+```
+
+也可以把服务地址作为默认配置：
+
+```bash
+flutter build apk --profile \
+  --dart-define=LOCAL_MOCK_SERVER=https://example.trycloudflare.com
+```
+
+手机必须能访问 cloudflared 地址。HTTPS 页面 / 地址对应 WSS；目标 App 不要使用电脑的 `localhost`。本地测试的明文 WS 仅适用于 `http://` relay 地址，Android 配置还需要允许对应明文连接。
+
+## 使用与生命周期
+
+1. App 启动后主动连接，失败时每 2 秒重试，不阻塞业务启动或真实网络请求。
+2. Web 控制台显示设备列表；只有一台在线设备时自动选中，多台时从下拉框选择。
+3. 保存、开关、删除、排序变更后自动下发，等待 App 确认后生效。
+4. 抓包持续由 App 上报，页面切换不停止记录；可筛选、查看详情并从请求生成规则。
+5. 每台设备保留最近 500 条抓包记录。App 重连会补发缓冲并去重；App 重启使用新的会话，避免旧序号污染新记录。
+6. Web 页面断开不会清空 App 内规则。relay 进程重启后内存状态丢失；App 重新连接后会重新上报当前规则和缓冲。
+7. `deviceId` 必须对每个 App 安装唯一；同一个设备 ID 的多个在线连接会被拒绝。
+
+抓包覆盖经过已接入 Dio / `HttpClient` 适配器的请求，不覆盖原生 SDK 或 WebView 的独立网络栈。二进制响应只记录大小占位信息。
 
 ## 规则格式
 
@@ -82,26 +145,20 @@ Flutter 调试期接口 Mock 工具。桌面端通过 Dart VM Service 把 Mock �
 
 字段说明见 [`local_mock_core`](local_mock_package/local_mock_core/README.md#规则字段)。
 
-### 用 AI 生成规则
-
-仓库提供了 Agent Skill [`skills/local-mock-rules`](skills/local-mock-rules/SKILL.md)。它会根据业务代码中的接口定义和模型类生成规则，并用 `scripts/validate_rules.py` 校验格式。需要安装到业务 App 仓库或全局后使用：
+## 验证
 
 ```bash
-# pi：作为 package 安装（自动发现 skills/ 目录），-l 表示只装到当前项目
-pi install git:github.com/Dabbit-Chan/local_mock
-pi install -l git:github.com/Dabbit-Chan/local_mock
-
-# 其他支持 Agent Skills 的工具：复制到业务仓库或全局 skills 目录
-git clone --depth 1 https://github.com/Dabbit-Chan/local_mock.git /tmp/local_mock
-cp -R /tmp/local_mock/skills/local-mock-rules <业务仓库>/.agents/skills/   # 或 ~/.agents/skills/
+cd local_mock_desktop
+flutter analyze
+flutter test
+flutter build web --no-web-resources-cdn
 ```
 
-不同工具的 skills 目录不同（如 Claude Code 为 `.claude/skills/`），按所用工具的约定放置即可。
+浏览器网络用例需要 relay 已启动：
 
-## 注意事项
+```bash
+flutter test --platform chrome test/browser_connection_test.dart \
+  --dart-define=LOCAL_MOCK_TEST_SERVER=http://127.0.0.1:9090
+```
 
-- 协议版本 v2（0.2.0+）：新版桌面端连接旧版 App 端（协议 v1）时会提示升级，不再兼容混用；请同时升级仓库内所有包。
-- VM Service 地址带有鉴权 token，等同于 App 的调试权限，不要分享给他人。桌面端不持久化保存规则或地址。
-- 断开桌面端连接不会清空 App 规则；桌面端保留抓包记录供查看，下次连接时清空本地和 App 端抓包缓冲。Hot Restart 后抓包重新开始记录。
-- 规则仅保存在 App isolate 内存中，冷启动时为空，不读取上一次运行的规则。
-- Hot Restart 后，只有桌面端保持连接时，才会在发现新 isolate 后自动重新下发当前全部规则；未连接桌面端时，规则为空。重新连接桌面端也会自动应用当前全部规则。
+仓库还提供 [`skills/local-mock-rules`](skills/local-mock-rules/SKILL.md) 用于生成和校验规则。

@@ -40,7 +40,7 @@ String? _describeBody(Object? data) {
 /// view, whether it was mocked or answered by the real backend.
 ///
 /// Add it after interceptors that change the request URL / method. Prefer
-/// [LocalMockDio.attach], which also registers the VM Service extensions.
+/// [LocalMockDio.attach], which also initializes local_mock.
 final class LocalMockInterceptor extends Interceptor {
   LocalMockInterceptor() {
     LocalMock.ensureInitialized();
@@ -179,9 +179,9 @@ final class LocalMockInterceptor extends Interceptor {
   }
 }
 
-/// Debug-only attachment for Dio 4.x and 5.x instances.
+/// Attachment for Debug and Profile builds.
 abstract final class LocalMockDio {
-  /// Returns false outside Debug mode, true when attached (or already
+  /// Returns false when local_mock is disabled, true when attached (or already
   /// attached). Attach after request interceptors that modify URL / method.
   static bool attach(Dio dio) {
     if (!LocalMock.ensureInitialized()) return false;

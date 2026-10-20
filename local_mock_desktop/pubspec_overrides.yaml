@@ -1,0 +1,5 @@
+dependency_overrides:
+  local_mock_core:
+    path: ../local_mock_package/local_mock_core
+  local_mock_transport:
+    path: ../local_mock_package/local_mock_transport

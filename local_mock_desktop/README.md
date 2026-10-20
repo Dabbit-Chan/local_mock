@@ -1,78 +1,89 @@
 # local_mock_desktop
 
-local_mock 的桌面控制端（macOS / Windows）。通过 Dart VM Service 连接调试中的 Flutter App，编辑并下发 Mock 规则。
+Flutter Web 控制台，复用规则编辑、抓包详情、从请求生成规则等界面。目标 App 主动连接同一个 WebSocket relay，控制台选择设备后下发规则。
 
-## 运行
+当前只保留 Web，不再提供 macOS / Windows 应用，也不需要独立的 `local_mock_server` 项目。
+
+## 本地可行性测试
+
+浏览器不能监听来自手机的 WebSocket，因此 `flutter run -d chrome` 的开发服务器不能直接作为 App 接入端。项目提供同目录下的 `tool/relay_host.dart`：它是一个本地开发启动脚本，同时托管 Web 构建产物和 App / 控制台 WebSocket 连接。
+
+终端一：
 
 ```bash
+cd local_mock_desktop
 flutter pub get
-flutter run -d macos     # 或 -d windows
+flutter build web --no-web-resources-cdn
+dart run tool/relay_host.dart 9090
 ```
 
-打包：
+终端二打开：
+
+```text
+http://127.0.0.1:9090/
+```
+
+终端三由你自己运行：
 
 ```bash
-flutter build macos
-flutter build windows
+cloudflared tunnel --url http://127.0.0.1:9090
 ```
 
-依赖通过相对路径引用 `../local_mock_package/local_mock_core`，需要保持仓库目录结构。
+目标 App 使用 cloudflared 输出的 HTTPS 地址连接：
 
-## 使用
-
-1. 业务 App 以 Debug 模式运行，并已接入 `local_mock_dio` 或 `local_mock_http`。
-2. 把 `flutter run` 输出的 VM Service 地址粘贴到“VM Service 地址”输入框，点击“连接”。
-   - 支持 `http(s)://` 和 `ws(s)://` 两种形式，会自动转换为 WebSocket 地址并补全 `/ws`。
-   - DevTools 页面地址（带查询参数）会被拒绝。
-3. 连接后每 2 秒轮询一次，发现注册了 `ext.local_mock.*` 扩展的 isolate：
-   - 只有一个时自动选中；
-   - 有多个时需要在下拉框里选择目标。
-4. 每次连接并选中目标后自动应用全部规则。新增、编辑保存、开关、删除和排序变更后也会自动同步；离线编辑在下次连接时应用。状态栏显示 App 确认后的规则条数，下一次请求生效。
-
-连接后可在顶部切换“Mock 规则” / “抓包”两个视图：
-
-- 抓包页会实时同步（每秒增量拉取）App 内经过 local_mock 适配器的请求，包括真实请求与 Mock 命中的请求（带 MOCK 标记）。
-- 列表支持按方法 / 域名 / 路径筛选，点击记录查看详情（请求体、状态码、耗时、格式化后的响应体）。
-- 点击记录右侧的闪电按钮或详情里的“生成 Mock 规则”，用该请求预填规则弹窗；保存后规则进入本地列表，连接就绪时自动应用。
-- “清空记录”会同时清空 App 端缓冲和本地列表。
-- 连接的 App 端版本过旧（协议 v1）时，抓包页会提示升级，规则功能不受影响。
-
-规则以卡片为单位管理：
-
-- 点击“添加规则”新建卡片，在弹窗中填写 ID、方法、路径、状态码、延迟、响应头与响应体；
-- 卡片上的开关可单独启用 / 停用某条规则；
-- 按住卡片直接拖动调整顺序（第一条启用且匹配的规则生效），无需长按；
-- 卡片右上角的按钮可编辑或删除规则（删除后可在提示条里撤销）。
-
-| 按钮 | 作用 |
-| --- | --- |
-| 应用到手机 | 校验规则后整体替换 App 内的规则表 |
-| 清空手机规则 | 清空 App 内的规则表 |
-| 添加规则 | 新建一张规则卡片并弹出编辑窗 |
-
-## 行为说明
-
-- 断开连接不会清空 App 内的规则，桌面端保留抓包记录，可继续筛选、查看详情和生成规则；下次连接时清理本地记录及 App 抓包缓冲。
-- App 冷启动时规则为空。Hot Restart 后会出现新的 isolate，只有桌面端保持连接时，才会自动重新下发当前全部规则；未连接桌面端时，规则为空。抓包记录会重新开始。
-- 连接或调用前会检查协议版本（`LocalMockProtocol.version`），不兼容时拒绝操作；旧版 App 端（v1）会提示升级到 0.2.0+。
-- 桌面端启动时规则列表为空，编辑的规则仅在当前会话中保留，关闭后不保存。
-- 卡片为固定尺寸并靠左排列，窗口变宽时只会增加列数，多余空间留在右侧，第一列不会随窗口宽度左右移动。
-- 抓包仅在“抓包”页可见时轮询，切回规则页自动停止。
-
-## 代码结构
-
-```
-lib/
-├── main.dart                 # UI（规则页 + 视图切换）
-└── src/
-    ├── mock_connection.dart  # VM Service 连接、isolate 发现、规则同步、抓包轮询
-    ├── capture_panel.dart    # 抓包页 UI：列表、筛选、详情、从请求生成规则
-    ├── rule_edit_dialog.dart # 规则编辑弹窗（规则页与抓包页共用）
-    └── vm_service_uri.dart   # 地址校验与规范化
+```dart
+LocalMock.connect(
+  serverUrl: 'https://example.trycloudflare.com',
+  deviceId: installationId,
+  deviceName: 'QA Android',
+);
 ```
 
-## 测试
+HTTPS 会自动转换成 `wss://example.trycloudflare.com/ws/app`。Web 页面会连接同一地址的 `/ws/console`。**没有访问令牌。** 这是可行性测试，隧道地址的访问者都可以修改规则。
+
+不要把 cloudflared 指向 `flutter run -d chrome` 的端口；Flutter 开发服务器只提供页面，不能处理本项目的 App WebSocket 协议。
+
+如果只想单独调试页面，可以运行：
 
 ```bash
+flutter run -d chrome
+```
+
+此时页面中填写 relay 地址，例如 `http://127.0.0.1:9090`；App 仍然连接 relay 端口。
+
+## 控制台行为
+
+- App 在线后自动出现在设备列表；多台设备时手动选择。
+- 选择设备后加载该设备规则和抓包记录，不会把上一台设备的规则混过去。
+- 规则保存、开关、删除和排序变更后自动同步，App 确认后生效。
+- 抓包由 App 持续上报，不依赖当前是否打开抓包页面；保留最近 500 条。
+- Web 页面断开不会清空 App 规则。relay 重启会丢失内存状态，App 重连后重新上报。
+
+## App 接入
+
+适配器接入和构建模式见[根 README](../README.md#目标-app-接入)。连接方法不需要令牌：
+
+```dart
+LocalMock.connect(
+  serverUrl: serverAddress,
+  deviceId: installationId,
+  deviceName: 'QA Android',
+);
+```
+
+## 构建与测试
+
+```bash
+flutter analyze
 flutter test
+flutter build web --no-web-resources-cdn
+```
+
+构建产物在 `build/web`。`tool/relay_host.dart` 需要先完成 Web 构建再运行。
+
+浏览器网络用例需要一个已运行的 relay：
+
+```bash
+flutter test --platform chrome test/browser_connection_test.dart \
+  --dart-define=LOCAL_MOCK_TEST_SERVER=http://127.0.0.1:9090
 ```

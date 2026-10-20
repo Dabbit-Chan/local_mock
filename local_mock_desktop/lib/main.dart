@@ -42,7 +42,7 @@ class MockPage extends StatefulWidget {
   /// Supplies initial rules, e.g. for tests.
   final List<Map<String, dynamic>>? initialRules;
 
-  /// Overrides the VM Service client, e.g. for tests; not disposed by the
+  /// Overrides the relay client, e.g. for tests; not disposed by the
   /// page when injected.
   final MockConnection? connection;
 
@@ -56,7 +56,10 @@ enum MockPageView { rules, capture }
 class _MockPageState extends State<MockPage> {
   late final MockConnection _connection = widget.connection ?? MockConnection();
   late final bool _ownsConnection = widget.connection == null;
-  final _address = TextEditingController();
+  final _address = TextEditingController(
+    text: const String.fromEnvironment('LOCAL_MOCK_SERVER'),
+  );
+  int _rulesRevision = 0;
   final _scrollController = ScrollController();
   final _gridKey = GlobalKey();
   late List<Map<String, dynamic>> _rules;
@@ -66,6 +69,14 @@ class _MockPageState extends State<MockPage> {
   @override
   void initState() {
     super.initState();
+    if (_address.text.isEmpty) {
+      final base = Uri.base;
+      _address.text = base.scheme == 'http' || base.scheme == 'https'
+          ? base.origin
+          : 'http://127.0.0.1:9090';
+    }
+    _rulesRevision = _connection.rulesRevision;
+    _connection.addListener(_readDeviceRules);
     _rules =
         widget.initialRules
             ?.map((rule) => Map<String, dynamic>.of(rule))
@@ -74,12 +85,30 @@ class _MockPageState extends State<MockPage> {
     _rulesChanged();
   }
 
+  void _readDeviceRules() {
+    if (!mounted || _rulesRevision == _connection.rulesRevision) return;
+    setState(() {
+      _rulesRevision = _connection.rulesRevision;
+      _rules = _connection.rules
+          .map((r) => Map<String, dynamic>.of(r))
+          .toList();
+    });
+  }
+
   Future<void> _action(Future<void> Function() action) async {
     setState(() => _message = null);
     try {
       await action();
     } catch (error) {
       if (mounted) setState(() => _message = _firstLine(error));
+    }
+  }
+
+  Future<void> _toggleConnection() async {
+    if (_connection.connected) {
+      _connection.disconnect();
+    } else {
+      await _connection.connect(_address.text);
     }
   }
 
@@ -169,12 +198,13 @@ class _MockPageState extends State<MockPage> {
 
   void _selectView(MockPageView view) => setState(() {
     _view = view;
-    // Poll traffic only while the capture tab is actually visible.
+    // Traffic is pushed continuously; this flag controls the visible view.
     _connection.setCaptureLive(view == MockPageView.capture);
   });
 
   @override
   void dispose() {
+    _connection.removeListener(_readDeviceRules);
     if (_ownsConnection) _connection.dispose();
     _address.dispose();
     _scrollController.dispose();
@@ -191,7 +221,7 @@ class _MockPageState extends State<MockPage> {
         builder: (context, _) => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('通过 VM Service 调试连接下发规则，无代理、无需 Hot Reload。'),
+            const Text('App 主动上报请求；连接后选择设备，编辑 Mock 规则。'),
             const SizedBox(height: 16),
             Row(
               children: [
@@ -200,24 +230,17 @@ class _MockPageState extends State<MockPage> {
                     controller: _address,
                     enabled: !_connection.connected && !_connection.working,
                     decoration: const InputDecoration(
-                      labelText: 'VM Service 地址',
-                      hintText: 'http://127.0.0.1:12345/auth-token=/',
+                      labelText: '连接地址',
+                      hintText: 'http://127.0.0.1:9090',
                     ),
                   ),
                 ),
+
                 const SizedBox(width: 12),
                 FilledButton(
                   onPressed: _connection.working
                       ? null
-                      : () {
-                          if (_connection.connected) {
-                            _connection.disconnect();
-                          } else {
-                            unawaited(
-                              _action(() => _connection.connect(_address.text)),
-                            );
-                          }
-                        },
+                      : () => unawaited(_action(_toggleConnection)),
                   child: Text(_connection.connected ? '断开' : '连接'),
                 ),
               ],
@@ -231,13 +254,16 @@ class _MockPageState extends State<MockPage> {
               const SizedBox(height: 12),
               DropdownButton<String>(
                 value: _connection.selectedId,
-                hint: const Text('选择目标 isolate'),
+                hint: const Text('选择目标设备'),
                 isExpanded: true,
                 items: [
                   for (final target in _connection.targets)
                     DropdownMenuItem(
                       value: target.id,
-                      child: Text('${target.name} (${target.id})'),
+                      enabled: target.online,
+                      child: Text(
+                        '${target.name} (${target.id})${target.online ? '' : ' · 离线'}',
+                      ),
                     ),
                 ],
                 onChanged: _connection.working
@@ -332,8 +358,8 @@ class _MockPageState extends State<MockPage> {
       Expanded(child: _buildRulesArea()),
       const SizedBox(height: 12),
       const Text(
-        '连接、保存规则和切换开关后会自动应用，下次请求生效。\n'
-        '断开后保留抓包记录，下次连接时清理；手机规则不会因断开而清空。',
+        '选择设备时读取该设备现有规则；保存和切换开关后自动应用，下次请求生效。\n'
+        '断开后手机规则继续生效；每台设备独立保存最近 500 条抓包记录。',
       ),
     ],
   );

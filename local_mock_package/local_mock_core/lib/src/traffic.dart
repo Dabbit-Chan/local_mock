@@ -83,8 +83,12 @@ final class TrafficEntry {
   };
 }
 
-/// Debug-only in-memory capture buffer, one per isolate.
+/// In-memory capture buffer with an optional count limit and event callback.
 final class TrafficRecorder {
+  TrafficRecorder({this.maxEntries, this.onEntry});
+
+  final int? maxEntries;
+  final void Function(TrafficEntry)? onEntry;
   final List<TrafficEntry> _entries = [];
   int _counter = 0;
 
@@ -105,7 +109,12 @@ final class TrafficRecorder {
       TrafficRecording._(this, method, uri);
 
   void _finish(TrafficEntry Function(int revision) build) {
-    _entries.add(build(++_counter));
+    final entry = build(++_counter);
+    _entries.add(entry);
+    if (maxEntries != null && _entries.length > maxEntries!) {
+      _entries.removeRange(0, _entries.length - maxEntries!);
+    }
+    onEntry?.call(entry);
   }
 }
 
