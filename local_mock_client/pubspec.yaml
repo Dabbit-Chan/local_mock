@@ -15,6 +15,7 @@ dependencies:
     path: ../local_mock_package/local_mock_transport
   flutter_reorderable_grid_view: ^5.7.0
   mime: ^2.0.0
+  web: ^1.1.1
 
 dev_dependencies:
   local_mock_http:

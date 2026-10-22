@@ -5,10 +5,12 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_reorderable_grid_view/widgets/widgets.dart';
+import 'package:local_mock_core/local_mock_core.dart';
 
 import 'src/capture_panel.dart';
 import 'src/mock_connection.dart';
 import 'src/rule_edit_dialog.dart';
+import 'src/rule_file_transfer.dart';
 
 void main() => runApp(const LocalMockApp());
 
@@ -38,7 +40,14 @@ class LocalMockApp extends StatelessWidget {
 String _firstLine(Object error) => error.toString().split('\n').first;
 
 class MockPage extends StatefulWidget {
-  const MockPage({super.key, this.initialRules, this.connection});
+  const MockPage({
+    super.key,
+    this.initialRules,
+    this.connection,
+    this.ruleFileTransfer = const RuleFileTransfer(),
+  });
+
+  final RuleFileTransfer ruleFileTransfer;
 
   /// Supplies initial rules, e.g. for tests.
   final List<Map<String, dynamic>>? initialRules;
@@ -62,6 +71,7 @@ class _MockPageState extends State<MockPage> {
   final _gridKey = GlobalKey();
   late List<Map<String, dynamic>> _rules;
   String? _message;
+  bool _transferringRules = false;
   MockPageView _view = MockPageView.rules;
 
   /// Deployed pages are served by the relay itself, so the page's own origin
@@ -125,6 +135,64 @@ class _MockPageState extends State<MockPage> {
 
   void _rulesChanged() {
     unawaited(_action(() => _connection.updateRules(jsonEncode(_rules))));
+  }
+
+  Future<void> _transferRules(Future<void> Function() action) async {
+    setState(() => _transferringRules = true);
+    try {
+      await _action(action);
+    } finally {
+      if (mounted) setState(() => _transferringRules = false);
+    }
+  }
+
+  Future<void> _importRules() async {
+    final previousRules = _rules;
+    final deviceId = _connection.selectedId;
+    final text = await widget.ruleFileTransfer.pickRules();
+    if (text == null || !mounted) return;
+    final imported = MockRule.parseList(
+      jsonDecode(text.startsWith('\uFEFF') ? text.substring(1) : text),
+    ).map((rule) => rule.toJson()).toList();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('导入 Mock 规则'),
+        content: Text(
+          '文件包含 ${imported.length} 条规则，将替换当前全部 ${_rules.length} 条规则。'
+          '已选择在线设备时会自动同步到手机，是否继续？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认导入'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    if (!identical(previousRules, _rules) ||
+        deviceId != _connection.selectedId) {
+      throw StateError('设备或规则已变更，请重新导入');
+    }
+    setState(() => _rules = imported);
+    await _connection.updateRules(jsonEncode(imported));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('已导入 ${imported.length} 条规则')));
+  }
+
+  Future<void> _exportRules() async {
+    final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
+    await widget.ruleFileTransfer.saveRules(
+      'mock-rules-$timestamp.json',
+      const JsonEncoder.withIndent('  ').convert(_rules),
+    );
   }
 
   void _setRule(int index, Map<String, dynamic> rule) {
@@ -314,6 +382,20 @@ class _MockPageState extends State<MockPage> {
                 ? () => unawaited(_action(_connection.clear))
                 : null,
             child: const Text('清空手机规则'),
+          ),
+          OutlinedButton.icon(
+            onPressed: _transferringRules
+                ? null
+                : () => unawaited(_transferRules(_importRules)),
+            icon: const Icon(Icons.file_upload_outlined),
+            label: const Text('导入规则'),
+          ),
+          OutlinedButton.icon(
+            onPressed: _transferringRules
+                ? null
+                : () => unawaited(_transferRules(_exportRules)),
+            icon: const Icon(Icons.file_download_outlined),
+            label: const Text('导出规则'),
           ),
         ],
       ),

@@ -4,6 +4,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:local_mock_client/main.dart';
 import 'package:local_mock_client/src/mock_connection.dart';
+import 'package:local_mock_client/src/rule_file_transfer.dart';
+
+class _MemoryRuleFileTransfer extends RuleFileTransfer {
+  String? contents;
+  Object? failure;
+  String? savedFilename;
+  String? savedContents;
+
+  @override
+  Future<String?> pickRules() async {
+    if (failure != null) throw failure!;
+    return contents;
+  }
+
+  @override
+  Future<void> saveRules(String filename, String contents) async {
+    if (failure != null) throw failure!;
+    savedFilename = filename;
+    savedContents = contents;
+  }
+}
 
 class _RecordingConnection extends MockConnection {
   final updates = <List<dynamic>>[];
@@ -32,6 +53,202 @@ Widget _app({String? rules}) => MaterialApp(
 );
 
 void main() {
+  testWidgets('exports all current rules as a JSON download while offline', (
+    tester,
+  ) async {
+    final files = _MemoryRuleFileTransfer();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MockPage(initialRules: _fixtureRules, ruleFileTransfer: files),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('导出规则'));
+    await tester.pumpAndSettle();
+
+    expect(files.savedFilename, startsWith('mock-rules-'));
+    expect(files.savedFilename, endsWith('.json'));
+    expect(jsonDecode(files.savedContents!), _fixtureRules);
+    expect(find.text('GET /api/user/profile'), findsOneWidget);
+  });
+
+  testWidgets('validates, confirms and synchronizes imported rules', (
+    tester,
+  ) async {
+    final imported = [
+      {
+        'id': 'imported',
+        'enabled': false,
+        'method': 'POST',
+        'path': '/导入',
+        'host': 'example.com',
+        'statusCode': 201,
+        'delayMs': 120,
+        'headers': {'x-mock': 'yes'},
+        'body': {
+          'message': '你好',
+          'values': [1, true, null],
+        },
+      },
+      {'id': 'second', 'method': 'GET', 'path': '/second'},
+    ];
+    final files = _MemoryRuleFileTransfer()
+      ..contents = '\uFEFF${jsonEncode(imported)}';
+    final connection = _RecordingConnection();
+    addTearDown(connection.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MockPage(
+          initialRules: _fixtureRules,
+          connection: connection,
+          ruleFileTransfer: files,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('导入规则'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('文件包含 2 条规则'), findsOneWidget);
+    expect(connection.updates, hasLength(1));
+    await tester.tap(find.text('确认导入'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('GET /api/user/profile'), findsNothing);
+    expect(find.text('POST /导入'), findsOneWidget);
+    expect(find.text('GET /second'), findsOneWidget);
+    expect(connection.updates.last.first, imported.first);
+    expect(connection.updates.last.last['id'], 'second');
+    expect(find.text('已导入 2 条规则'), findsOneWidget);
+
+    await tester.tap(find.text('导出规则'));
+    await tester.pumpAndSettle();
+    expect(jsonDecode(files.savedContents!), connection.updates.last);
+  });
+
+  for (final cancelPicker in [true, false]) {
+    testWidgets(
+      'preserves rules when cancelling ${cancelPicker ? 'picker' : 'confirmation'}',
+      (tester) async {
+        final files = _MemoryRuleFileTransfer()
+          ..contents = cancelPicker ? null : '[]';
+        final connection = _RecordingConnection();
+        addTearDown(connection.dispose);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: MockPage(
+              initialRules: _fixtureRules,
+              connection: connection,
+              ruleFileTransfer: files,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('导入规则'));
+        await tester.pumpAndSettle();
+        if (!cancelPicker) {
+          await tester.tap(find.text('取消'));
+          await tester.pumpAndSettle();
+        }
+
+        expect(find.text('GET /api/user/profile'), findsOneWidget);
+        expect(connection.updates, hasLength(1));
+        expect(
+          tester
+              .widget<OutlinedButton>(
+                find.ancestor(
+                  of: find.text('导入规则'),
+                  matching: find.byWidgetPredicate(
+                    (widget) => widget is OutlinedButton,
+                  ),
+                ),
+              )
+              .onPressed,
+          isNotNull,
+        );
+      },
+    );
+  }
+
+  for (final invalid in [
+    'not json',
+    '{}',
+    '[null]',
+    '[{"id":"bad","method":"GET","path":"missing-slash"}]',
+    '[{"id":"same","method":"GET","path":"/a"},{"id":"same","method":"GET","path":"/b"}]',
+    '[{"id":"bad","method":"GET","path":"/","statusCode":999}]',
+  ]) {
+    testWidgets('rejects invalid imported rules: $invalid', (tester) async {
+      final files = _MemoryRuleFileTransfer()..contents = invalid;
+      final connection = _RecordingConnection();
+      addTearDown(connection.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MockPage(
+            initialRules: _fixtureRules,
+            connection: connection,
+            ruleFileTransfer: files,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('导入规则'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('FormatException'), findsOneWidget);
+      expect(find.text('确认导入'), findsNothing);
+      expect(find.text('GET /api/user/profile'), findsOneWidget);
+      expect(connection.updates, hasLength(1));
+    });
+  }
+
+  testWidgets('imports an empty array only after confirmation', (tester) async {
+    final files = _MemoryRuleFileTransfer()..contents = '[]';
+    final connection = _RecordingConnection();
+    addTearDown(connection.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MockPage(
+          initialRules: _fixtureRules,
+          connection: connection,
+          ruleFileTransfer: files,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('导入规则'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确认导入'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('暂无规则，添加一条开始 Mock'), findsOneWidget);
+    expect(connection.updates.last, isEmpty);
+    await tester.tap(find.text('导出规则'));
+    await tester.pumpAndSettle();
+    expect(jsonDecode(files.savedContents!), isEmpty);
+  });
+
+  testWidgets('reports file errors and allows retrying', (tester) async {
+    final files = _MemoryRuleFileTransfer()..failure = StateError('文件不可用');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MockPage(initialRules: _fixtureRules, ruleFileTransfer: files),
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final label in ['导入规则', '导出规则']) {
+      await tester.tap(find.text(label));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('文件不可用'), findsOneWidget);
+    }
+    files.failure = null;
+    await tester.tap(find.text('导出规则'));
+    await tester.pumpAndSettle();
+    expect(jsonDecode(files.savedContents!), _fixtureRules);
+    expect(find.textContaining('文件不可用'), findsNothing);
+  });
+
   testWidgets('starts with no rules and synchronizes an empty list', (
     tester,
   ) async {
