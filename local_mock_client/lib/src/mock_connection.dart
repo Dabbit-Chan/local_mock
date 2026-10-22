@@ -36,6 +36,10 @@ class MockConnection extends ChangeNotifier {
   int _epoch = -1;
   String? _session;
   Future<void>? _draining;
+  bool _autoReconnect = false;
+  Timer? _retry;
+
+  static const _reconnectDelay = Duration(seconds: 2);
 
   bool get connected => _peer != null;
   bool get working => _working;
@@ -58,7 +62,10 @@ class MockConnection extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
-  Future<void> connect(String address) async {
+  Future<void> connect(String address, {bool autoReconnect = false}) async {
+    _autoReconnect = autoReconnect;
+    _retry?.cancel();
+    _retry = null;
     final uri = relayUri(address, 'console');
     disconnect();
     final generation = _generation;
@@ -85,9 +92,11 @@ class MockConnection extends ChangeNotifier {
       unawaited(
         peer.done.then((_) {
           if (_peer != peer) return;
+          final retry = _autoReconnect;
           disconnect();
-          _status = '服务连接已断开，请重新连接';
+          _status = retry ? '服务连接已断开，自动重连中…' : '服务连接已断开，请重新连接';
           _notify();
+          if (retry) _scheduleRetry(address);
         }),
       );
       // Device events can arrive during the initial handshake.
@@ -95,13 +104,27 @@ class MockConnection extends ChangeNotifier {
         await selectTarget(_targets.singleWhere((t) => t.online).id);
       }
     } catch (error) {
+      final retry = _autoReconnect && generation == _generation && !_disposed;
       if (generation == _generation && !_disposed) {
         disconnect();
-        _status = '连接失败：$error';
+        _status = retry ? '连接失败：$error，自动重连中…' : '连接失败：$error';
         _notify();
       }
+      if (retry) _scheduleRetry(address);
       rethrow;
     }
+  }
+
+  /// Keeps the console attached to its relay: [connect] retries every few
+  /// seconds until it succeeds, and a dropped link schedules the next attempt.
+  /// A manual [disconnect] (or dispose) cancels the pending timer.
+  void _scheduleRetry(String address) {
+    if (_disposed) return;
+    _retry?.cancel();
+    _retry = Timer(_reconnectDelay, () {
+      if (_disposed) return;
+      unawaited(connect(address, autoReconnect: true).catchError((_) {}));
+    });
   }
 
   void _event(Map<String, dynamic> event) {
@@ -289,6 +312,8 @@ class MockConnection extends ChangeNotifier {
 
   void disconnect() {
     _generation++;
+    _retry?.cancel();
+    _retry = null;
     _peer?.close();
     _peer = null;
     _working = false;

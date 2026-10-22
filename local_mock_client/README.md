@@ -49,10 +49,11 @@ HTTPS 会自动转换成 `wss://example.trycloudflare.com/ws/app`。Web 页面�
 flutter run -d chrome
 ```
 
-此时页面中填写 relay 地址，例如 `http://127.0.0.1:9090`；App 仍然连接 relay 端口。
+部署后的页面（由 relay 托管 `build/web`）打开后自动连接同源 relay 开始监听，连接失败或断开时每 2 秒自动重连，页面上没有地址输入框，构建时也不需要任何 `--dart-define`。`flutter run -d chrome` 的开发服务器不是 relay，自动连接会持续失败；这种模式只适合单独调试页面 UI，要连真实设备请用 relay 托管部署。
 
 ## 控制台行为
 
+- 页面部署后打开即自动连接同源 relay 开始监听，连接失败或断开时自动重连，无需任何手动操作。`LOCAL_MOCK_SERVER` 只用于目标 App，控制台不识别它。
 - App 在线后自动出现在设备列表；多台设备时手动选择。
 - 选择设备后加载该设备规则和抓包记录，不会把上一台设备的规则混过去。
 - 规则保存、开关、删除和排序变更后自动同步，App 确认后生效。

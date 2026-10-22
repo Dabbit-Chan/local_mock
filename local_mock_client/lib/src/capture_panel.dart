@@ -175,7 +175,7 @@ class _CapturePanelState extends State<CapturePanel> {
     if (!widget.connected && widget.entries.isEmpty) {
       return _HintState(
         icon: Icons.link_off,
-        text: '未连接。先在上方连接服务并选择设备，App 内经过 local_mock 适配器的请求会显示在这里。',
+        text: '未连接。页面会自动连接服务并重试，选择设备后 App 内经过 local_mock 适配器的请求会显示在这里。',
       );
     }
     if (widget.connected && !widget.ready && widget.entries.isEmpty) {

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_reorderable_grid_view/widgets/widgets.dart';
 
@@ -56,9 +57,6 @@ enum MockPageView { rules, capture }
 class _MockPageState extends State<MockPage> {
   late final MockConnection _connection = widget.connection ?? MockConnection();
   late final bool _ownsConnection = widget.connection == null;
-  final _address = TextEditingController(
-    text: const String.fromEnvironment('LOCAL_MOCK_SERVER'),
-  );
   int _rulesRevision = 0;
   final _scrollController = ScrollController();
   final _gridKey = GlobalKey();
@@ -66,15 +64,13 @@ class _MockPageState extends State<MockPage> {
   String? _message;
   MockPageView _view = MockPageView.rules;
 
+  /// Deployed pages are served by the relay itself, so the page's own origin
+  /// is always the relay address.
+  static String _serverAddress() => Uri.base.origin;
+
   @override
   void initState() {
     super.initState();
-    if (_address.text.isEmpty) {
-      final base = Uri.base;
-      _address.text = base.scheme == 'http' || base.scheme == 'https'
-          ? base.origin
-          : 'http://127.0.0.1:9090';
-    }
     _rulesRevision = _connection.rulesRevision;
     _connection.addListener(_readDeviceRules);
     _rules =
@@ -83,6 +79,21 @@ class _MockPageState extends State<MockPage> {
             .toList() ??
         [];
     _rulesChanged();
+    // The page listens from the moment it is deployed: connect to the relay
+    // and keep reconnecting without any manual input. Injected connections
+    // (tests) and VM runs are not deployed pages.
+    if (kIsWeb && widget.connection == null) {
+      final address = _serverAddress();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          unawaited(
+            _connection
+                .connect(address, autoReconnect: true)
+                .catchError((_) {}),
+          );
+        }
+      });
+    }
   }
 
   void _readDeviceRules() {
@@ -101,14 +112,6 @@ class _MockPageState extends State<MockPage> {
       await action();
     } catch (error) {
       if (mounted) setState(() => _message = _firstLine(error));
-    }
-  }
-
-  Future<void> _toggleConnection() async {
-    if (_connection.connected) {
-      _connection.disconnect();
-    } else {
-      await _connection.connect(_address.text);
     }
   }
 
@@ -206,7 +209,6 @@ class _MockPageState extends State<MockPage> {
   void dispose() {
     _connection.removeListener(_readDeviceRules);
     if (_ownsConnection) _connection.dispose();
-    _address.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -221,31 +223,8 @@ class _MockPageState extends State<MockPage> {
         builder: (context, _) => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('App 主动上报请求；连接后选择设备，编辑 Mock 规则。'),
+            const Text('App 主动上报请求；页面自动连接服务，选择设备后编辑 Mock 规则。'),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _address,
-                    enabled: !_connection.connected && !_connection.working,
-                    decoration: const InputDecoration(
-                      labelText: '连接地址',
-                      hintText: 'http://127.0.0.1:9090',
-                    ),
-                  ),
-                ),
-
-                const SizedBox(width: 12),
-                FilledButton(
-                  onPressed: _connection.working
-                      ? null
-                      : () => unawaited(_action(_toggleConnection)),
-                  child: Text(_connection.connected ? '断开' : '连接'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
             SelectableText(
               '${_connection.status}'
               '${_connection.remoteRuleCount == null ? '' : ' · 手机规则 ${_connection.remoteRuleCount} 条'}',
