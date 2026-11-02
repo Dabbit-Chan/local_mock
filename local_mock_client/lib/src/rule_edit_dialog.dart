@@ -9,11 +9,13 @@ class RuleEditDialog extends StatefulWidget {
     required this.initial,
     required this.existingIds,
     this.isNewRule = false,
+    this.matchRecordedParams = true,
   });
 
   final Map<String, dynamic> initial;
   final Set<String> existingIds;
   final bool isNewRule;
+  final bool matchRecordedParams;
 
   @override
   State<RuleEditDialog> createState() => _RuleEditDialogState();
@@ -50,10 +52,24 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
         : '',
   );
   late final _body = TextEditingController(
-    text: widget.initial['body'] == null
-        ? ''
-        : const JsonEncoder.withIndent('  ').convert(widget.initial['body']),
+    text:
+        widget.initial['responseText'] as String? ??
+        (widget.initial['body'] == null
+            ? ''
+            : const JsonEncoder.withIndent(
+                '  ',
+              ).convert(widget.initial['body'])),
   );
+  late final _recordedQuery = TextEditingController(
+    text: const JsonEncoder.withIndent(
+      '  ',
+    ).convert((widget.initial['recordedRequest'] as Map?)?['query'] ?? {}),
+  );
+  late final _recordedBody = TextEditingController(
+    text: (widget.initial['recordedRequest'] as Map?)?['body'] as String? ?? '',
+  );
+  bool get _hasRecordedRequest => widget.initial['recordedRequest'] != null;
+  bool get _rawResponse => widget.initial['responseText'] != null;
   late final _params = TextEditingController(
     text: widget.initial['params'] == null
         ? ''
@@ -89,6 +105,8 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
     _delayMs.dispose();
     _headers.dispose();
     _body.dispose();
+    _recordedQuery.dispose();
+    _recordedBody.dispose();
     _params.dispose();
     _patchBody.dispose();
     super.dispose();
@@ -172,6 +190,16 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
     if (!_formKey.currentState!.validate()) return;
     final headersText = _headers.text.trim();
     final bodyText = _body.text.trim();
+    dynamic body;
+    if (!_hasPatch && _rawResponse) {
+      try {
+        body = jsonDecode(_body.text);
+      } on FormatException {
+        body = _body.text;
+      }
+    } else if (!_hasPatch && bodyText.isNotEmpty) {
+      body = jsonDecode(bodyText);
+    }
     final draft = <String, dynamic>{
       'id': _id.text.trim(),
       'enabled': widget.initial['enabled'] == true,
@@ -187,8 +215,15 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
         'body': widget.initial['body'],
       } else ...{
         if (headersText.isNotEmpty) 'headers': jsonDecode(headersText),
-        if (bodyText.isNotEmpty) 'body': jsonDecode(bodyText),
+        'body': body,
       },
+      if (_rawResponse)
+        'responseText': _hasPatch ? widget.initial['responseText'] : _body.text,
+      if (_hasRecordedRequest)
+        'recordedRequest': {
+          'query': jsonDecode(_recordedQuery.text),
+          if (_recordedBody.text.isNotEmpty) 'body': _recordedBody.text,
+        },
       if (_params.text.trim().isNotEmpty) 'params': jsonDecode(_params.text),
       if (_patchBody.text.trim().isNotEmpty)
         'patchBody': jsonDecode(_patchBody.text),
@@ -266,6 +301,42 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
                         controller: _host,
                         decoration: _decoration('Host（可选，留空匹配任意域名）'),
                       ),
+                      if (_hasRecordedRequest) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          widget.matchRecordedParams
+                              ? '本组仅 Mock 以下录制参数；可修改 query 和请求体。'
+                              : '本组忽略录制参数，以下配置会保留，开启“只 Mock 录制时的传参”后生效。',
+                        ),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: _recordedQuery,
+                          minLines: 2,
+                          maxLines: 4,
+                          decoration: _decoration(
+                            '录制 query 参数 JSON',
+                            hint: '{"id": ["1"]}',
+                          ),
+                          validator: (value) {
+                            try {
+                              RecordedRequest.fromJson({
+                                'query': jsonDecode(value ?? ''),
+                                'body': _recordedBody.text,
+                              });
+                              return null;
+                            } on FormatException {
+                              return '必须是 JSON 对象，参数值为字符串数组';
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: _recordedBody,
+                          minLines: 2,
+                          maxLines: 4,
+                          decoration: _decoration('录制请求体（文本 / JSON）'),
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _params,
@@ -348,10 +419,15 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
                         maxLines: 8,
                         minLines: 4,
                         textAlignVertical: TextAlignVertical.top,
-                        decoration: _decoration('响应体 JSON（留空视为 null）'),
+                        decoration: _decoration(
+                          _rawResponse
+                              ? '响应体文本（支持 JSON）'
+                              : '响应体 JSON（留空视为 null）',
+                        ),
                         style: const TextStyle(fontFamily: 'monospace'),
-                        validator: (value) =>
-                            _hasPatch ? null : _jsonValidator(value),
+                        validator: (value) => _hasPatch || _rawResponse
+                            ? null
+                            : _jsonValidator(value),
                       ),
                     ],
                   ),

@@ -59,6 +59,7 @@ LocalMockDio.attach(dio);                // 再挂 local_mock
 - 未命中规则的请求在 `onResponse` / `onError` 里记录真实结果；被后续拦截器提前 resolve 的请求不记录。
 - 请求体：`String` / JSON 可编码对象直接记录；`FormData` 只记录字段与文件数量。
 - 在 Debug 和 Profile 模式记录；连接后实时上报到服务端，再由 Web / 桌面控制台展示。
+- 新版 Web 控制台将一整段录制作为一个可编辑 Mock 组，可选是否只匹配录制传参；与普通规则共用优先级、整组开关和导入导出，命中后固定返回对应子规则响应，不按次数切换响应。一级弹窗管理组，二级弹窗编辑参数及响应。整包 Mock 仍要求 `ResponseType.json`，FormData / 二进制占位符及失败请求只保留查看。需同步更新 core 和本适配器，详见根 README 的“录制与回放”。
 
 ## 测试
 

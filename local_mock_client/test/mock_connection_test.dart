@@ -26,6 +26,29 @@ Future<void> waitUntil(bool Function() condition) async {
   }
 }
 
+TrafficSession replaySession() => TrafficSession(
+  id: 'flow',
+  name: '历史流程',
+  deviceId: 'other-device',
+  deviceName: '另一台手机',
+  startedAt: 100,
+  endedAt: 200,
+  entries: [
+    TrafficEntry(
+      revision: 1,
+      startedAt: 100,
+      durationMs: 0,
+      mocked: false,
+      method: 'GET',
+      uri: 'https://api.test/api/profile',
+      path: '/api/profile',
+      statusCode: 202,
+      contentType: 'application/json',
+      responseBody: '{"name":"replayed"}',
+    ),
+  ],
+);
+
 class TestApp {
   TestApp(String address, String id) {
     agent = LocalMockAgent(
@@ -104,6 +127,153 @@ void main() {
     await waitUntil(() => app.agent.connected);
     return app;
   }
+
+  test(
+    'recording excludes history and survives the live 500-entry cap and clear',
+    () async {
+      final app = await startApp('a');
+      await connection.connect(address);
+      app.emit('/before');
+      await waitUntil(() => connection.traffic.length == 1);
+      connection.startRecording('完整流程');
+      for (var index = 0; index < 520; index++) {
+        app.emit('/recorded-$index');
+      }
+      await waitUntil(() => connection.recordedCount == 520);
+      await connection.clearTraffic();
+      app.emit('/after-clear');
+      await waitUntil(() => connection.recordedCount == 521);
+      final saved = connection.stopRecording();
+      expect(saved.name, '完整流程');
+      expect(saved.deviceId, 'a');
+      expect(saved.entries, hasLength(521));
+      expect(saved.entries.first.path, '/recorded-0');
+      expect(saved.entries.last.path, '/after-clear');
+      expect(connection.traffic, hasLength(1));
+      app.emit('/after-stop');
+      await waitUntil(() => connection.traffic.length == 2);
+      expect(saved.entries, hasLength(521));
+      expect(() => connection.startRecording('new'), throwsStateError);
+      connection.acknowledgeRecording(saved.id);
+      connection.startRecording('next');
+      expect(connection.recordedCount, 0);
+    },
+  );
+
+  test(
+    'recording cannot mix devices and stops with a recoverable draft offline',
+    () async {
+      final app = await startApp('a');
+      final other = await startApp('b');
+      await connection.connect(address);
+      await connection.selectTarget('a');
+      connection.startRecording('a only');
+      await expectLater(connection.selectTarget('b'), throwsStateError);
+      app.emit('/recorded');
+      other.emit('/not-recorded');
+      await waitUntil(() => connection.recordedCount == 1);
+      app.agent.stop();
+      await waitUntil(() => !connection.recording);
+      expect(connection.pendingRecording!.entries.single.path, '/recorded');
+      expect(connection.pendingRecording!.deviceId, 'a');
+      expect(connection.ready, isFalse);
+    },
+  );
+
+  test(
+    'state refreshes and app reconnects do not duplicate a recording',
+    () async {
+      final app = await startApp('a');
+      await connection.connect(address);
+      app.emit('/before');
+      await waitUntil(() => connection.traffic.length == 1);
+      connection.startRecording('refresh');
+      app.emit('/once');
+      await waitUntil(() => connection.recordedCount == 1);
+      await connection.apply(ruleJson('state refresh'));
+      await connection.selectTarget('a');
+      expect(connection.recordedCount, 1);
+      connection.disconnect();
+      expect(connection.recording, isFalse);
+      expect(connection.pendingRecording!.entries.single.path, '/once');
+    },
+  );
+
+  test(
+    'recording Mock group is acknowledged, editable and survives console reconnect',
+    () async {
+      LocalMock.connect(serverUrl: address, deviceId: 'sdk');
+      await waitUntil(() => LocalMock.connected);
+      await connection.connect(address);
+      expect(connection.supportsRecordingMocks, isTrue);
+      await connection.apply(ruleJson('manual'));
+      final group = recordingMockFromSession(
+        replaySession(),
+        matchParams: true,
+      ).toJson();
+      await connection.apply(jsonEncode([group, ...connection.rules]));
+      expect(connection.rules.first['recordingId'], 'flow');
+      expect(connection.rules.last['body'], {'name': 'manual'});
+      final uri = Uri.parse('https://api.test/api/profile');
+      expect(LocalMock.match('GET', uri)!.body, {'name': 'replayed'});
+      connection.disconnect();
+      await connection.connect(address);
+      expect(connection.rules.first['name'], '历史流程');
+      await connection.apply(
+        jsonEncode([
+          {...group, 'enabled': false},
+          connection.rules.last,
+        ]),
+      );
+      expect(LocalMock.match('GET', uri)!.body, {'name': 'manual'});
+    },
+  );
+
+  test(
+    'older apps cannot falsely acknowledge replay and keep existing rules',
+    () async {
+      await startApp('old');
+      await connection.connect(address);
+      await connection.apply(ruleJson('kept'));
+      expect(connection.supportsRecordingMocks, isFalse);
+      await expectLater(
+        connection.apply(
+          jsonEncode([recordingMockFromSession(replaySession()).toJson()]),
+        ),
+        throwsStateError,
+      );
+      expect(connection.rules.single['body'], {'name': 'kept'});
+    },
+  );
+
+  test(
+    'rapid edits to recording groups converge to the latest acknowledged version',
+    () async {
+      LocalMock.connect(serverUrl: address, deviceId: 'sdk');
+      await waitUntil(() => LocalMock.connected);
+      await connection.connect(address);
+      final group = recordingMockFromSession(replaySession()).toJson();
+      final first = connection.updateRules(jsonEncode([group]));
+      final child = (group['rules'] as List).single as Map<String, dynamic>;
+      final edited = {
+        ...group,
+        'rules': [
+          {
+            ...child,
+            'body': {'name': 'edited'},
+            'responseText': '{"name":"edited"}',
+          },
+        ],
+      };
+      final second = connection.updateRules(jsonEncode([edited]));
+      await Future.wait([first, second]);
+      expect(connection.rules.single, edited);
+      expect(
+        LocalMock.match('GET', Uri.parse('https://api.test/api/profile'))!.body,
+        {'name': 'edited'},
+      );
+    },
+  );
 
   test(
     'real SDK reports traffic, receives rules and excludes control traffic',

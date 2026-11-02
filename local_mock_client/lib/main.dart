@@ -7,10 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_reorderable_grid_view/widgets/widgets.dart';
 import 'package:local_mock_core/local_mock_core.dart';
 
-import 'src/capture_panel.dart';
+import 'src/capture_session_store.dart';
+import 'src/capture_workspace.dart';
 import 'src/mock_connection.dart';
 import 'src/rule_edit_dialog.dart';
 import 'src/rule_file_transfer.dart';
+import 'src/recording_mock_dialog.dart';
 
 void main() => runApp(const LocalMockApp());
 
@@ -45,9 +47,11 @@ class MockPage extends StatefulWidget {
     this.initialRules,
     this.connection,
     this.ruleFileTransfer = const RuleFileTransfer(),
+    this.captureSessionStore = const CaptureSessionStore(),
   });
 
   final RuleFileTransfer ruleFileTransfer;
+  final CaptureSessionStore captureSessionStore;
 
   /// Supplies initial rules, e.g. for tests.
   final List<Map<String, dynamic>>? initialRules;
@@ -229,18 +233,27 @@ class _MockPageState extends State<MockPage> {
 
   Future<void> _editRule(int index) async {
     final current = _rules[index];
+    final existingIds = {
+      for (final (other, rule) in _rules.indexed)
+        if (other != index) rule['id'] as String,
+    };
     final updated = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (_) => RuleEditDialog(
-        isNewRule: false,
-        initial: current,
-        existingIds: {
-          for (final (i, rule) in _rules.indexed)
-            if (i != index) rule['id'] as String,
-        },
-      ),
+      builder: (_) => current['type'] == 'recording'
+          ? RecordingMockDialog(initial: current, existingIds: existingIds)
+          : RuleEditDialog(
+              isNewRule: false,
+              initial: current,
+              existingIds: existingIds,
+            ),
     );
-    if (updated != null && mounted) _setRule(index, updated);
+    if (updated != null && mounted) {
+      if (index >= _rules.length || !identical(_rules[index], current)) {
+        setState(() => _message = '设备或规则已变更，请重新打开编辑');
+        return;
+      }
+      _setRule(index, updated);
+    }
   }
 
   void _deleteRule(int index) {
@@ -350,9 +363,10 @@ class _MockPageState extends State<MockPage> {
             ],
             const SizedBox(height: 12),
             Expanded(
-              child: _view == MockPageView.rules
-                  ? _buildRulesView()
-                  : _buildCaptureView(),
+              child: IndexedStack(
+                index: _view.index,
+                children: [_buildRulesView(), _buildCaptureView()],
+              ),
             ),
           ],
         ),
@@ -425,21 +439,29 @@ class _MockPageState extends State<MockPage> {
     ],
   );
 
-  Widget _buildCaptureView() => CapturePanel(
-    connected: _connection.connected,
-    ready: _connection.ready,
-    available: _connection.captureAvailable,
-    live: _connection.captureLive,
-    entries: _connection.traffic,
+  Widget _buildCaptureView() => CaptureWorkspace(
+    connection: _connection,
+    store: widget.captureSessionStore,
     existingRuleIds: _rules.map((rule) => rule['id'] as String).toSet(),
+    recordingMocks: _rules
+        .where((rule) => rule['type'] == 'recording')
+        .toList(),
     onRuleCreated: (rule) {
+      final existing = rule['type'] == 'recording'
+          ? _rules.indexWhere(
+              (current) =>
+                  current['type'] == 'recording' &&
+                  current['recordingId'] == rule['recordingId'],
+            )
+          : -1;
+      if (existing >= 0) {
+        _setRule(existing, rule);
+        return;
+      }
       setState(() => _rules = [..._rules, rule]);
       _rulesChanged();
     },
     onViewRules: () => _selectView(MockPageView.rules),
-    onClear: _connection.ready && _connection.captureAvailable
-        ? () => unawaited(_action(_connection.clearTraffic))
-        : null,
   );
 
   Widget _buildRulesArea() {
@@ -544,13 +566,24 @@ class RuleCard extends StatelessWidget {
     final patchBody = rule['patchBody'] as Map<String, dynamic>? ?? const {};
     final params = rule['params'] as Map<String, dynamic>? ?? const {};
     final isPatch = patchBody.isNotEmpty;
-    final bodyText = [
-      if (params.isNotEmpty) '参数匹配: ${jsonEncode(params)}',
-      if (isPatch)
-        '字段补丁: ${jsonEncode(patchBody)}'
-      else
-        rule['body'] == null ? 'null' : jsonEncode(rule['body']),
-    ].join('\n');
+    final isRecording = rule['type'] == 'recording';
+    final children =
+        (rule['rules'] as List?)?.cast<Map<String, dynamic>>() ??
+        const <Map<String, dynamic>>[];
+    final bodyText = isRecording
+        ? children
+              .map(
+                (child) =>
+                    '${child['enabled'] == false ? '已关闭 · ' : ''}${child['method']} ${child['path']}',
+              )
+              .join('\n')
+        : [
+            if (params.isNotEmpty) '参数匹配: ${jsonEncode(params)}',
+            if (isPatch)
+              '字段补丁: ${jsonEncode(patchBody)}'
+            else
+              rule['body'] == null ? 'null' : jsonEncode(rule['body']),
+          ].join('\n');
     final headers = (rule['headers'] as Map<String, dynamic>? ?? const {});
 
     return Card(
@@ -577,7 +610,9 @@ class RuleCard extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          '${rule['method']} ${rule['path']}',
+                          isRecording
+                              ? '录制 Mock · ${rule['name']}'
+                              : '${rule['method']} ${rule['path']}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.titleSmall?.copyWith(
@@ -619,10 +654,18 @@ class RuleCard extends StatelessWidget {
                 spacing: 6,
                 runSpacing: 4,
                 children: [
-                  _MetaChip(label: isPatch ? '字段补丁' : '${rule['statusCode']}'),
+                  if (isRecording) ...[
+                    _MetaChip(label: '${children.length} 个接口'),
+                    _MetaChip(
+                      label: rule['matchParams'] == true ? '仅录制传参' : '不限录制传参',
+                    ),
+                  ] else
+                    _MetaChip(
+                      label: isPatch ? '字段补丁' : '${rule['statusCode']}',
+                    ),
                   if (params.isNotEmpty)
                     _MetaChip(label: '${params.length} 个参数条件'),
-                  if (rule['delayMs'] != 0)
+                  if (!isRecording && rule['delayMs'] != 0)
                     _MetaChip(label: '${rule['delayMs']}ms'),
                   if (!isPatch && headers.isNotEmpty)
                     _MetaChip(label: '${headers.length} headers'),

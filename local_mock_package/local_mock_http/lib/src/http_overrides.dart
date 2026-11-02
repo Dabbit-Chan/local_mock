@@ -36,8 +36,7 @@ final class _MockHttpClient implements HttpClient {
   @override
   Future<HttpClientRequest> openUrl(String method, Uri url) {
     final traffic = LocalMock.beginTraffic(method, url);
-    final candidates = LocalMock.candidates(method, url);
-    if (candidates.isEmpty) {
+    if (!LocalMock.hasCandidates(method, url)) {
       final opening = _inner.openUrl(method, url);
       if (traffic == null) return opening;
       return opening.then(
@@ -49,7 +48,6 @@ final class _MockHttpClient implements HttpClient {
     final request = _MockRequest(
       method,
       url,
-      candidates,
       () => _inner.openUrl(method, url),
       _pending.remove,
       traffic,
@@ -74,7 +72,7 @@ final class _MockHttpClient implements HttpClient {
       path: reference.path,
       query: reference.hasQuery ? reference.query : null,
     );
-    if (LocalMock.candidates(method, url).isEmpty) {
+    if (!LocalMock.hasCandidates(method, url)) {
       final traffic = LocalMock.beginTraffic(method, url);
       final opening = _inner.open(method, host, port, path);
       if (traffic == null) return opening;
@@ -206,7 +204,6 @@ final class _MockRequest implements HttpClientRequest {
   _MockRequest(
     this.method,
     this.uri,
-    this._candidates,
     this._openReal,
     this._onFinish,
     this._traffic,
@@ -215,7 +212,6 @@ final class _MockRequest implements HttpClientRequest {
     _done.future.ignore();
   }
 
-  final List<MockRule> _candidates;
   final Future<HttpClientRequest> Function() _openReal;
   final TrafficRecording? _traffic;
   final void Function(_MockRequest) _onFinish;
@@ -290,13 +286,7 @@ final class _MockRequest implements HttpClientRequest {
   Future<HttpClientResponse> _respond() async {
     final bytes = _body.takeBytes();
     final requestBody = utf8.decode(bytes, allowMalformed: true);
-    MockRule? rule;
-    for (final candidate in _candidates) {
-      if (candidate.matches(method, uri, requestBody: requestBody)) {
-        rule = candidate;
-        break;
-      }
-    }
+    final rule = LocalMock.match(method, uri, requestBody: requestBody);
     if (rule != null && !rule.isPatch) {
       _mocked = true;
       await _wait(rule.delayMs);
@@ -304,7 +294,7 @@ final class _MockRequest implements HttpClientRequest {
         mocked: true,
         statusCode: rule.statusCode,
         contentType: rule.responseHeaders['content-type'],
-        body: jsonEncode(rule.body),
+        body: rule.responseText,
       );
       return _MockResponse(method, rule);
     }
@@ -433,7 +423,7 @@ final class _MockResponse extends StreamView<List<int>>
         method.toUpperCase() == 'HEAD' ||
         rule.statusCode == 204 ||
         rule.statusCode == 304;
-    final bytes = noBody ? <int>[] : utf8.encode(jsonEncode(rule.body));
+    final bytes = noBody ? <int>[] : utf8.encode(rule.responseText);
     final headers = _MockHeaders();
     rule.responseHeaders.forEach(headers.set);
     headers.contentLength = bytes.length;

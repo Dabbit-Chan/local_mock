@@ -12,6 +12,7 @@ class _Device {
   String session;
   WebSocket? socket;
   List<dynamic> rules = [];
+  bool supportsRecordingMocks = false;
   final traffic = <Map<String, dynamic>>[];
   bool busy = false;
   bool ready = false;
@@ -107,6 +108,9 @@ class LocalMockRelay {
                     (args['state'] as Map)['rules'] as List,
                   );
                 }
+                final appState = args['state'] as Map;
+                device!.supportsRecordingMocks =
+                    appState['supportsRecordingMocks'] == true;
                 _devices[id] = device!;
                 initialized = true;
                 deadline.cancel();
@@ -243,6 +247,7 @@ class LocalMockRelay {
         throw const FormatException('Invalid app state');
       }
       device.rules = List.of(state['rules'] as List);
+      device.supportsRecordingMocks = state['supportsRecordingMocks'] == true;
       return state;
     } finally {
       _pending.remove(key);
@@ -255,6 +260,7 @@ class LocalMockRelay {
     'entries': device.traffic,
     'sessionId': device.session,
     'epoch': device.epoch,
+    'supportsRecordingMocks': device.supportsRecordingMocks,
   };
 
   void _appendTraffic(_Device device, List<Map<String, dynamic>> entries) {

@@ -26,6 +26,11 @@ abstract final class LocalMock {
   static LocalMockAgent? _agent;
   static Uri? _serverUri;
 
+  static Map<String, dynamic> get _state => {
+    ..._registry.state,
+    'supportsRecordingMocks': true,
+  };
+
   /// Enabled in Debug and Profile; disabled in Release.
   static const enabled = !kReleaseMode;
 
@@ -48,7 +53,7 @@ abstract final class LocalMock {
       serverUrl: serverUrl,
       deviceId: deviceId,
       deviceName: deviceName ?? deviceId,
-      snapshot: () => {..._registry.state, ..._trafficSnapshot(0)},
+      snapshot: () => {..._state, ..._trafficSnapshot(0)},
       onCommand: (method, args) {
         switch (method) {
           case 'replaceRules':
@@ -62,7 +67,7 @@ abstract final class LocalMock {
           default:
             throw FormatException('Unknown command: $method');
         }
-        return _registry.state;
+        return _state;
       },
     )..start();
     return true;
@@ -119,6 +124,11 @@ abstract final class LocalMock {
       ? List.unmodifiable(_registry.candidates(method, uri))
       : const [];
 
+  static bool hasCandidates(String method, Uri uri) =>
+      enabled &&
+      !_isControlRequest(uri) &&
+      _registry.candidates(method, uri).isNotEmpty;
+
   /// Starts recording one request for the capture view. Returns null outside
   /// enabled modes. Call [TrafficRecording.finish] or [TrafficRecording.fail] once it settles.
   static TrafficRecording? beginTraffic(String method, Uri uri) =>
@@ -131,7 +141,9 @@ abstract final class LocalMock {
 
   /// Clears rules without the VM Service, for adapter tests.
   @visibleForTesting
-  static void debugClear() => _registry.clear();
+  static void debugClear() {
+    _registry.clear();
+  }
 
   /// Recorded traffic, oldest first, for adapter tests.
   @visibleForTesting

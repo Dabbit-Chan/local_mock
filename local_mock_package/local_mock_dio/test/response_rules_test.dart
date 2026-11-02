@@ -83,6 +83,67 @@ void main() {
   });
 
   test(
+    'a recording Mock group returns stable edited responses through Dio alongside manual rules',
+    () async {
+      final group = recordingMockFromSession(
+        TrafficSession(
+          id: 'dio-replay',
+          name: 'Dio 流程',
+          deviceId: 'device',
+          deviceName: '设备',
+          startedAt: 1,
+          endedAt: 3,
+          entries: [
+            for (final revision in [1, 2])
+              TrafficEntry(
+                revision: revision,
+                startedAt: revision,
+                durationMs: 0,
+                mocked: false,
+                method: 'POST',
+                uri: 'https://api.test/api/order?id=1',
+                path: '/api/order',
+                requestBody: '{"id":1}',
+                statusCode: 201,
+                contentType: 'application/json; charset=utf-8',
+                responseBody: '{"step":$revision}',
+              ),
+          ],
+        ),
+        matchParams: true,
+      );
+      LocalMock.debugReplaceRules([
+        group.toJson(),
+        {
+          'id': 'manual',
+          'method': 'GET',
+          'path': '/api/order',
+          'body': {'source': 'mock'},
+        },
+      ]);
+      for (final step in [2, 2, 2]) {
+        final response = await dio.post<dynamic>(
+          '/api/order?id=1',
+          data: {'id': 1},
+        );
+        expect(response.statusCode, 201);
+        expect(response.data, {'step': step});
+        expect(response.extra['local_mock'], isTrue);
+      }
+      expect(adapter.calls, 0);
+      final unmatched = await dio.post<dynamic>(
+        '/api/order?id=2',
+        data: {'id': 2},
+      );
+      expect(unmatched.data['data']['id'], '2');
+      expect(adapter.calls, 1);
+      final manual = await dio.get<dynamic>('/api/order');
+      expect(manual.data, {'source': 'mock'});
+      expect(LocalMock.debugTrafficEntries().first.responseBody, '{"step":2}');
+    },
+  );
+
+  test(
     'only the chosen query id is replaced; others reach the backend',
     () async {
       replace(params: {'id': 2});

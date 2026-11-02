@@ -38,6 +38,14 @@ class MockConnection extends ChangeNotifier {
   Future<void>? _draining;
   bool _autoReconnect = false;
   Timer? _retry;
+  bool _supportsRecordingMocks = false;
+  String? _recordingName;
+  MockTarget? _recordingTarget;
+  String? _recordingAppSession;
+  int _recordingStartedAt = 0;
+  int _recordingRevision = 0;
+  List<TrafficEntry> _recorded = [];
+  TrafficSession? _pendingRecording;
 
   static const _reconnectDelay = Duration(seconds: 2);
 
@@ -57,6 +65,11 @@ class MockConnection extends ChangeNotifier {
   List<Map<String, dynamic>> get traffic => _traffic;
   List<Map<String, dynamic>> get rules => _rules;
   int get rulesRevision => _rulesRevision;
+  bool get supportsRecordingMocks => _supportsRecordingMocks;
+  bool get recording => _recordingName != null;
+  String? get recordingName => _recordingName;
+  int get recordedCount => _recorded.length;
+  TrafficSession? get pendingRecording => _pendingRecording;
 
   void _notify() {
     if (!_disposed) notifyListeners();
@@ -141,6 +154,7 @@ class MockConnection extends ChangeNotifier {
       }).toList();
       if (_selectedId != null &&
           !_targets.any((t) => t.id == _selectedId && t.online)) {
+        if (recording) stopRecording();
         _status = '设备已离线，保留规则与抓包记录';
       } else if (_selectedId != null && !_working) {
         _status = '设备在线';
@@ -176,9 +190,20 @@ class MockConnection extends ChangeNotifier {
 
   void _readTraffic(Map<String, dynamic> data, {required bool replace}) {
     final changed = _session != data['sessionId'] || _epoch != data['epoch'];
+    if (recording && _recordingAppSession != data['sessionId']) {
+      stopRecording();
+    }
     _session = data['sessionId'] as String;
     _epoch = data['epoch'] as int;
     final incoming = (data['entries'] as List).cast<Map<String, dynamic>>();
+    if (recording) {
+      for (final entry in incoming) {
+        final revision = entry['revision'] as int;
+        if (revision <= _recordingRevision) continue;
+        _recorded.add(TrafficEntry.fromJson(entry));
+        _recordingRevision = revision;
+      }
+    }
     if (replace || changed) _traffic = [];
     final last = _traffic.isEmpty ? 0 : _traffic.last['revision'] as int;
     _traffic = [
@@ -191,6 +216,7 @@ class MockConnection extends ChangeNotifier {
   }
 
   void _adoptRules(Map<String, dynamic> state) {
+    _supportsRecordingMocks = state['supportsRecordingMocks'] == true;
     _rules = (state['rules'] as List).cast<Map<String, dynamic>>();
     _remoteRuleCount = _rules.length;
     _rulesRevision++;
@@ -211,6 +237,9 @@ class MockConnection extends ChangeNotifier {
 
   Future<void> selectTarget(String id) async {
     if (!connected || _working) return;
+    if (recording && id != _selectedId) {
+      throw StateError('请先停止并保存当前设备的录制');
+    }
     if (!_targets.any((t) => t.id == id && t.online)) throw StateError('设备已离线');
     final generation = _generation;
     final previousId = _selectedId;
@@ -239,9 +268,13 @@ class MockConnection extends ChangeNotifier {
   }
 
   Future<void> updateRules(String text) async {
-    _rules = MockRule.parseList(
-      jsonDecode(text),
-    ).map((r) => r.toJson()).toList();
+    final parsed = MockRule.parseList(jsonDecode(text));
+    if (ready &&
+        !_supportsRecordingMocks &&
+        parsed.any((rule) => rule.isRecording)) {
+      throw StateError('请更新目标 App 的 local_mock_core 和适配器以支持录制 Mock');
+    }
+    _rules = parsed.map((rule) => rule.toJson()).toList();
     _editVersion++;
     if (_draining != null) return _draining;
     if (!ready) return;
@@ -294,6 +327,58 @@ class MockConnection extends ChangeNotifier {
     _notify();
   }
 
+  void startRecording(String name) {
+    if (!ready || !captureAvailable) throw StateError('请先选择就绪设备');
+    if (recording) throw StateError('正在录制中');
+    if (_pendingRecording != null) throw StateError('请先保存上一段录制');
+    if (name.trim().isEmpty) throw const FormatException('请输入录制名称');
+    _recordingName = name.trim();
+    _recordingTarget = _targets.singleWhere(
+      (target) => target.id == _selectedId,
+    );
+    _recordingAppSession = _session;
+    _recordingStartedAt = DateTime.now().millisecondsSinceEpoch;
+    _recordingRevision = _traffic.isEmpty
+        ? 0
+        : _traffic.last['revision'] as int;
+    _recorded = [];
+    _notify();
+  }
+
+  TrafficSession stopRecording() {
+    if (!recording) {
+      final pending = _pendingRecording;
+      if (pending != null) return pending;
+      throw StateError('没有正在进行的录制');
+    }
+    final target = _recordingTarget!;
+    final stoppedAt = DateTime.now().millisecondsSinceEpoch;
+    final session = TrafficSession(
+      id: '${DateTime.now().microsecondsSinceEpoch}',
+      name: _recordingName!,
+      deviceId: target.id,
+      deviceName: target.name,
+      startedAt: _recordingStartedAt,
+      endedAt: stoppedAt < _recordingStartedAt
+          ? _recordingStartedAt
+          : stoppedAt,
+      entries: _recorded,
+    );
+    _pendingRecording = session;
+    _recordingName = null;
+    _recordingTarget = null;
+    _recordingAppSession = null;
+    _notify();
+    return session;
+  }
+
+  void acknowledgeRecording(String id) {
+    if (_pendingRecording?.id != id) return;
+    _pendingRecording = null;
+    _recorded = [];
+    _notify();
+  }
+
   Future<void> clearTraffic() async {
     if (!ready) throw StateError('请先选择就绪设备');
     final generation = _generation;
@@ -311,6 +396,7 @@ class MockConnection extends ChangeNotifier {
   }
 
   void disconnect() {
+    if (recording) stopRecording();
     _generation++;
     _retry?.cancel();
     _retry = null;
@@ -320,6 +406,7 @@ class MockConnection extends ChangeNotifier {
     _targets = [];
     _selectedId = null;
     _remoteRuleCount = null;
+    _supportsRecordingMocks = false;
     _status = '未连接服务';
     _notify();
   }

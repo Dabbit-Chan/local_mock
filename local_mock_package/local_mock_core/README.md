@@ -116,6 +116,16 @@ LocalMock.debugClearTraffic();
 - 独立使用 `TrafficRecorder` 时，可通过 `maxEntries` 配置数量上限、`onEntry` 订阅完成事件。
 - 二进制响应体不记录内容，只记录大小占位符（由适配器处理）。
 
+## 录制会话与分组 Mock
+
+- `TrafficSession` 是可序列化、带格式版本的录制会话，包含设备信息、录制起止时间和有序请求列表；`fromJson` 会校验整个文件，`toJson` 可用于保存或导出。会话保存在 Web 控制台当前浏览器，App 的 500 条缓冲上限不限制控制台正在进行的录制。
+- `recordingMockFromSession(session, matchParams: false)` 生成一个 `MockRule` 组。其 JSON 包含 `type: "recording"`、`id`、`name`、`recordingId`、`enabled`、`matchParams`、`rules`。子规则只允许普通响应 / 字段补丁，不允许嵌套组；导入会完整校验后才替换。组和子规则 ID 分别在各自列表中唯一。
+- 不使用独立的开始 / 停止回放命令；组通过现有 `replaceRules` 与普通规则一起下发和确认。App 状态使用 `supportsRecordingMocks: true` 表示支持，组复用普通规则的连接恢复与生命周期。
+- 子规则的 `recordedRequest` 保存原 query（字符串数组对象）及请求体文本。组的 `matchParams` 关闭时忽略这部分录制参数；开启时完整匹配 query / 请求体，JSON / 普通表单的对象键顺序不影响匹配。手工填写的 `params` 始终作为附加条件生效。
+- `LocalMock.match` 依次匹配顶层规则及组内子规则，第一条启用且匹配的响应生效，无顺序消费状态。生成时相同请求保留最后一次开始的请求响应，不同传参的请求保留独立子规则；忽略参数后由组内顺序确定优先级。
+- 自定义适配器使用 `LocalMock.hasCandidates` 判断是否需要延迟打开真实请求，收集请求体后调用 `LocalMock.match`。`LocalMock.candidates` 会展开启用组的子规则；返回字节应使用 `MockRule.responseText`，以保留原始文本而不是再次 JSON 编码。
+- Web 控制台以两级弹窗编辑录制 Mock 组及内部规则；编辑结果随规则导入导出，不修改 `TrafficSession` 原始记录。失败 / 二进制占位 / 不可还原请求不生成子规则；未命中任何规则仍可访问真实网络。
+
 ## 旧 VM Service 协议（仅 Debug）
 
 协议版本：`LocalMockProtocol.version = 2`

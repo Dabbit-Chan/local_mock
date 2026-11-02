@@ -15,9 +15,6 @@ final DioErrorType _badResponseType = DioErrorType.values.firstWhere(
   (type) => type.name == 'badResponse' || type.name == 'response',
 );
 
-/// Default content-type recorded for mocked responses.
-const _mockContentType = 'application/json; charset=utf-8';
-
 /// Best-effort body text for the capture view; never throws.
 String? _describeBody(Object? data) {
   if (data == null) return null;
@@ -141,8 +138,8 @@ final class LocalMockInterceptor extends Interceptor {
       traffic?.finish(
         mocked: true,
         statusCode: rule.statusCode,
-        contentType: _mockContentType,
-        body: jsonEncode(rule.body),
+        contentType: rule.responseHeaders['content-type'],
+        body: rule.responseText,
       );
       if (!options.validateStatus(rule.statusCode)) {
         if (!options.receiveDataWhenStatusError) response.data = null;

@@ -1,5 +1,8 @@
 import 'dart:convert';
 
+import 'traffic.dart';
+import 'recorded_request.dart';
+
 /// A JSON response or response patch matched by endpoint and optional params.
 /// The first enabled match wins.
 final class MockRule {
@@ -15,9 +18,45 @@ final class MockRule {
     required this.body,
     required this.params,
     required this.patchBody,
-  });
+    String? responseText,
+    this.name,
+    this.recordingId,
+    this.matchParams = false,
+    this.rules = const [],
+    this.recordedRequest,
+    bool matchRecordedParams = true,
+  }) : _responseText = responseText,
+       _matchRecordedParams = matchRecordedParams;
 
-  factory MockRule.fromJson(Map<String, dynamic> json) {
+  factory MockRule.fromTraffic(TrafficEntry entry, {required String id}) {
+    dynamic body = entry.responseBody;
+    try {
+      body = jsonDecode(entry.responseBody ?? 'null');
+    } on FormatException {
+      body = entry.responseBody;
+    }
+    return MockRule._(
+      id: id,
+      enabled: true,
+      method: entry.method.toUpperCase(),
+      path: entry.path,
+      host: Uri.parse(entry.uri).host,
+      statusCode: entry.statusCode!,
+      delayMs: entry.durationMs.clamp(0, 60000),
+      headers: {
+        'content-type': entry.contentType ?? 'application/json; charset=utf-8',
+      },
+      body: body,
+      params: const {},
+      patchBody: const {},
+      responseText: entry.responseBody ?? '',
+    );
+  }
+
+  factory MockRule.fromJson(
+    Map<String, dynamic> json, {
+    bool matchRecordedParams = true,
+  }) {
     String text(String key) {
       final value = json[key];
       if (value is! String || value.trim().isEmpty) {
@@ -35,6 +74,45 @@ final class MockRule {
     }
 
     final id = text('id');
+    final enabled = json['enabled'] ?? true;
+    if (enabled is! bool) {
+      throw const FormatException('enabled must be a boolean');
+    }
+    if (json['type'] == 'recording') {
+      final matchParams = json['matchParams'] ?? false;
+      final rawRules = json['rules'];
+      if (matchParams is! bool || rawRules is! List || rawRules.isEmpty) {
+        throw const FormatException(
+          'recording Mock needs rules and a boolean matchParams',
+        );
+      }
+      if (rawRules.any(
+        (rule) => rule is! Map<String, dynamic> || rule['type'] != null,
+      )) {
+        throw const FormatException(
+          'recording Mock can only contain response rules',
+        );
+      }
+      final children = parseList(rawRules, matchRecordedParams: matchParams);
+      return MockRule._(
+        id: id,
+        enabled: enabled,
+        name: text('name'),
+        recordingId: text('recordingId'),
+        matchParams: matchParams,
+        rules: List.unmodifiable(children),
+        method: '',
+        path: '/',
+        host: null,
+        statusCode: 200,
+        delayMs: 0,
+        headers: const {},
+        body: null,
+        params: const {},
+        patchBody: const {},
+      );
+    }
+    if (json['type'] != null) throw const FormatException('unknown rule type');
     final method = text('method').toUpperCase();
     if (!RegExp(r'^[A-Z]+$').hasMatch(method)) {
       throw const FormatException('method must contain only ASCII letters');
@@ -44,10 +122,6 @@ final class MockRule {
       throw const FormatException(
         'path must start with /, without query or fragment',
       );
-    }
-    final enabled = json['enabled'] ?? true;
-    if (enabled is! bool) {
-      throw const FormatException('enabled must be a boolean');
     }
     final host = json['host'];
     if (host != null && (host is! String || host.trim().isEmpty)) {
@@ -81,6 +155,10 @@ final class MockRule {
     for (final path in rawPatch.keys) {
       _fieldPath(path, allowWildcard: true);
     }
+    final responseText = json['responseText'];
+    if (responseText != null && responseText is! String) {
+      throw const FormatException('responseText must be a string');
+    }
     return MockRule._(
       id: id,
       enabled: enabled,
@@ -97,6 +175,11 @@ final class MockRule {
       patchBody: Map.unmodifiable(
         jsonDecode(jsonEncode(rawPatch)) as Map<String, dynamic>,
       ),
+      responseText: responseText as String?,
+      recordedRequest: json['recordedRequest'] == null
+          ? null
+          : RecordedRequest.fromJson(json['recordedRequest']),
+      matchRecordedParams: matchRecordedParams,
     );
   }
 
@@ -111,6 +194,25 @@ final class MockRule {
   final dynamic body;
   final Map<String, String> params;
   final Map<String, dynamic> patchBody;
+  final String? _responseText;
+  final String? name;
+  final String? recordingId;
+  final bool matchParams;
+  final List<MockRule> rules;
+  final RecordedRequest? recordedRequest;
+  final bool _matchRecordedParams;
+
+  bool get isRecording => recordingId != null;
+
+  Iterable<MockRule> candidates(String method, Uri uri) => !enabled
+      ? const []
+      : isRecording
+      ? rules.where((rule) => rule.matchesEndpoint(method, uri))
+      : matchesEndpoint(method, uri)
+      ? [this]
+      : const [];
+
+  String get responseText => _responseText ?? jsonEncode(body);
 
   bool get isPatch => patchBody.isNotEmpty;
 
@@ -132,6 +234,11 @@ final class MockRule {
 
   bool matches(String requestMethod, Uri uri, {dynamic requestBody}) {
     if (!matchesEndpoint(requestMethod, uri)) return false;
+    if (_matchRecordedParams &&
+        recordedRequest != null &&
+        !recordedRequest!.matches(uri, requestBody)) {
+      return false;
+    }
     if (params.isEmpty) return true;
     final body = _decodeRequestBody(requestBody);
     Map<String, List<String>> query;
@@ -256,22 +363,38 @@ final class MockRule {
     }
   }
 
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'enabled': enabled,
-    'method': method,
-    'path': path,
-    if (host != null) 'host': host,
-    'statusCode': statusCode,
-    'delayMs': delayMs,
-    'headers': headers,
-    'body': body,
-    if (params.isNotEmpty) 'params': params,
-    if (patchBody.isNotEmpty) 'patchBody': patchBody,
-  };
+  Map<String, dynamic> toJson() => isRecording
+      ? {
+          'type': 'recording',
+          'id': id,
+          'name': name,
+          'recordingId': recordingId,
+          'enabled': enabled,
+          'matchParams': matchParams,
+          'rules': [for (final rule in rules) rule.toJson()],
+        }
+      : {
+          'id': id,
+          'enabled': enabled,
+          'method': method,
+          'path': path,
+          if (host != null) 'host': host,
+          'statusCode': statusCode,
+          'delayMs': delayMs,
+          'headers': headers,
+          'body': body,
+          if (params.isNotEmpty) 'params': params,
+          if (patchBody.isNotEmpty) 'patchBody': patchBody,
+          if (_responseText != null) 'responseText': _responseText,
+          if (recordedRequest != null)
+            'recordedRequest': recordedRequest!.toJson(),
+        };
 
   /// Parses the entire list before use, rejecting duplicate IDs.
-  static List<MockRule> parseList(dynamic value) {
+  static List<MockRule> parseList(
+    dynamic value, {
+    bool matchRecordedParams = true,
+  }) {
     if (value is! List) {
       throw const FormatException('rules must be a JSON array');
     }
@@ -281,7 +404,10 @@ final class MockRule {
       if (item is! Map<String, dynamic>) {
         throw const FormatException('each rule must be an object');
       }
-      final rule = MockRule.fromJson(item);
+      final rule = MockRule.fromJson(
+        item,
+        matchRecordedParams: matchRecordedParams,
+      );
       if (!ids.add(rule.id)) {
         throw FormatException('duplicate rule ID: ${rule.id}');
       }

@@ -89,6 +89,7 @@ class CapturePanel extends StatefulWidget {
     required this.onRuleCreated,
     required this.onViewRules,
     this.onClear,
+    this.historyName,
   });
 
   final bool connected;
@@ -104,6 +105,7 @@ class CapturePanel extends StatefulWidget {
   final ValueChanged<Map<String, dynamic>> onRuleCreated;
   final VoidCallback onViewRules;
   final VoidCallback? onClear;
+  final String? historyName;
 
   @override
   State<CapturePanel> createState() => _CapturePanelState();
@@ -172,19 +174,25 @@ class _CapturePanelState extends State<CapturePanel> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
 
-    if (!widget.connected && widget.entries.isEmpty) {
+    if (widget.historyName == null &&
+        !widget.connected &&
+        widget.entries.isEmpty) {
       return _HintState(
         icon: Icons.link_off,
         text: '未连接。页面会自动连接服务并重试，选择设备后 App 内经过 local_mock 适配器的请求会显示在这里。',
       );
     }
-    if (widget.connected && !widget.ready && widget.entries.isEmpty) {
+    if (widget.historyName == null &&
+        widget.connected &&
+        !widget.ready &&
+        widget.entries.isEmpty) {
       return const _HintState(
         icon: Icons.hourglass_top,
         text: '等待目标就绪…（App 连接服务后，从下拉框选择在线设备）',
       );
     }
-    if (widget.connected &&
+    if (widget.historyName == null &&
+        widget.connected &&
         widget.ready &&
         !widget.available &&
         widget.entries.isEmpty) {
@@ -204,8 +212,10 @@ class _CapturePanelState extends State<CapturePanel> {
           children: [
             Expanded(
               child: Text(
-                '抓包记录（${widget.entries.length}）'
-                '${!widget.connected
+                '${widget.historyName == null ? '抓包记录' : '录制：${widget.historyName}'}（${widget.entries.length}）'
+                '${widget.historyName != null
+                    ? ' · 已保存'
+                    : !widget.connected
                     ? ' · 已断开，保留记录'
                     : widget.live
                     ? ' · 实时同步中'
@@ -213,11 +223,12 @@ class _CapturePanelState extends State<CapturePanel> {
                 style: theme.textTheme.titleSmall,
               ),
             ),
-            OutlinedButton.icon(
-              onPressed: widget.onClear,
-              icon: const Icon(Icons.cleaning_services_outlined),
-              label: const Text('清空记录'),
-            ),
+            if (widget.historyName == null)
+              OutlinedButton.icon(
+                onPressed: widget.onClear,
+                icon: const Icon(Icons.cleaning_services_outlined),
+                label: const Text('清空记录'),
+              ),
           ],
         ),
         const SizedBox(height: 8),
@@ -238,6 +249,9 @@ class _CapturePanelState extends State<CapturePanel> {
 
   Widget _buildList() {
     if (widget.entries.isEmpty) {
+      if (widget.historyName != null) {
+        return const _HintState(icon: Icons.history, text: '这段录制没有请求记录。');
+      }
       return const _HintState(
         icon: Icons.wifi_tethering,
         text: '实时捕获中。在 App 里发起请求，经过 local_mock 适配器的请求会出现在这里。',
