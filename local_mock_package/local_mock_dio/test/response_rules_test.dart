@@ -178,6 +178,82 @@ void main() {
     },
   );
 
+  test(
+    'wildcard patches every album name only for the matched request',
+    () async {
+      adapter.rawBody = jsonEncode({
+        'data': {
+          'sitePhotoAlbumList': [
+            {'id': 2334, 'name': '全部'},
+            {'id': 2335, 'name': '天然虾青素'},
+          ],
+        },
+      });
+      replace(
+        params: {'id': 2},
+        patchBody: {'data.sitePhotoAlbumList[*].name': '很长很长的相册名'},
+      );
+      final original = await dio.get<dynamic>('/api/order?id=1');
+      final patched = await dio.get<dynamic>('/api/order?id=2');
+      expect(original.data['data']['sitePhotoAlbumList'], [
+        {'id': 2334, 'name': '全部'},
+        {'id': 2335, 'name': '天然虾青素'},
+      ]);
+      expect(patched.data['data']['sitePhotoAlbumList'], [
+        {'id': 2334, 'name': '很长很长的相册名'},
+        {'id': 2335, 'name': '很长很长的相册名'},
+      ]);
+      expect(patched.statusCode, 201);
+      expect(patched.extra['local_mock_rule_id'], 'order');
+      expect(LocalMock.debugTrafficEntries().map((entry) => entry.mocked), [
+        false,
+        true,
+      ]);
+      expect(
+        jsonDecode(LocalMock.debugTrafficEntries().last.responseBody!),
+        patched.data,
+      );
+    },
+  );
+
+  test(
+    'out-of-range patches do not cancel valid indexed or wildcard patches',
+    () async {
+      adapter.rawBody = jsonEncode({
+        'data': {
+          'title': 'original',
+          'items': [
+            {'name': 'first'},
+            {'name': 'second'},
+          ],
+        },
+      });
+      replace(
+        patchBody: {
+          'data.title': 'changed',
+          'data.items[9].name': 'ignored',
+          'data.items[*].name': 'all',
+          'data.items[0].name': 'first only',
+          'data.items[5]': null,
+        },
+      );
+      final response = await dio.get<dynamic>('/api/order');
+      expect(response.data, {
+        'data': {
+          'title': 'changed',
+          'items': [
+            {'name': 'first only'},
+            {'name': 'all'},
+          ],
+        },
+      });
+      expect(response.statusCode, 201);
+      expect(response.headers.value('x-backend'), 'true');
+      expect(response.headers.value('content-length'), isNull);
+      expect(LocalMock.debugTrafficEntries().single.mocked, isTrue);
+    },
+  );
+
   test('params and patch combine without changing other ids', () async {
     replace(params: {'id': 2}, patchBody: {'data.product.sku': 'fixed'});
     final first = await dio.get<dynamic>('/api/order?id=1');

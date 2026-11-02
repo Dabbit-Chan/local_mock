@@ -47,7 +47,8 @@ description: 为 local_mock 生成 Mock 规则 JSON 对象（粘贴到 local_moc
 
 - 按数组顺序匹配，第一条 `enabled` 且 `method`、`path`、`host`（如设置）、`params`（如设置）全部匹配的规则生效，不叠加。
 - `params` 不填时忽略参数；填写 `{"id":"123"}` 可只修改一个 ID 的响应。指定键先查 URL query，再查 JSON / URL 编码表单请求体，支持嵌套请求体路径；同名 query 优先。多条件全满足、额外参数不限，缺失键不匹配 null。
-- 用 `patchBody: {"data.product": {...}}` 固定不同订单中的商品，但保留各自状态；用 `params` + `patchBody` 仅补丁指定 ID。路径支持 `data.items[0].name`，数组 / 对象的值整体替换。父级不存在、类型不符、数组越界或非 JSON 时保留整个真实响应。
+- 用 `patchBody: {"data.product": {...}}` 固定不同订单中的商品，但保留各自状态；用 `params` + `patchBody` 仅补丁指定 ID。路径支持 `data.items[0].name`、`data.items[*].name`，`[*]` 遍历数组全部元素，支持嵌套和根数组；数组 / 对象的值整体替换，每个目标独立深拷贝。
+- 数组越界只跳过对应路径 / 分支，其他补丁继续；空数组不修改、不扩容。路径按填写顺序执行，可先用 `[*]` 批量修改，再用 `[0]` 覆盖。父级不存在、类型不符（包括对非数组使用 `[*]`）或非 JSON 时仍保留整个真实响应。`[*]` 只用于补丁，不扩展参数匹配。
 - 非空 `patchBody` 仍会访问真实后端，忽略规则中的 `body`、`statusCode`、`headers`；真实 HTTP 状态码和其他字段不变。`delayMs` 是得到真实响应后的额外延迟。补丁依赖后端可用，不能用来模拟离线成功。
 - 同一接口的多个场景可以一起输出，只把要测的那条设为 `enabled: true`，其余设为 `false`。
 - 默认响应头为 `content-type: application/json; charset=utf-8`，一般不用写 `headers`。

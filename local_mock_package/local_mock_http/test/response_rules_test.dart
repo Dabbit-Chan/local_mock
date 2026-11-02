@@ -11,6 +11,7 @@ void main() {
   late HttpServer server;
   late Uri base;
   late HttpClient client;
+  Map<String, dynamic>? backendBody;
   final requests = <Map<String, dynamic>>[];
 
   void replace({
@@ -57,14 +58,17 @@ void main() {
         'cookie': request.headers.value(HttpHeaders.cookieHeader),
       });
       final id = request.uri.queryParameters['id'] ?? 'unknown';
-      final text = jsonEncode({
-        'code': 0,
-        'data': {
-          'id': id,
-          'status': id == '1' ? 'PAID' : 'SHIPPED',
-          'product': {'sku': 'backend-$id'},
-        },
-      });
+      final text = jsonEncode(
+        backendBody ??
+            {
+              'code': 0,
+              'data': {
+                'id': id,
+                'status': id == '1' ? 'PAID' : 'SHIPPED',
+                'product': {'sku': 'backend-$id'},
+              },
+            },
+      );
       request.response
         ..statusCode = request.uri.path == '/api/error' ? 503 : 201
         ..headers.contentType = ContentType.json
@@ -91,6 +95,7 @@ void main() {
   tearDownAll(() => server.close(force: true));
 
   setUp(() {
+    backendBody = null;
     requests.clear();
     client = HttpOverrides.runWithHttpOverrides(
       HttpClient.new,
@@ -205,6 +210,76 @@ void main() {
       true,
     ]);
   });
+
+  test(
+    'wildcard patches every album name only for the matched request',
+    () async {
+      backendBody = {
+        'data': {
+          'sitePhotoAlbumList': [
+            {'id': 2334, 'name': '全部'},
+            {'id': 2335, 'name': '天然虾青素'},
+          ],
+        },
+      };
+      replace(
+        params: {'id': 2},
+        patchBody: {'data.sitePhotoAlbumList[*].name': '很长很长的相册名'},
+      );
+      final (_, original) = await send('/api/order?id=1');
+      final (response, patched) = await send('/api/order?id=2');
+      expect(jsonDecode(original), backendBody);
+      expect(jsonDecode(patched)['data']['sitePhotoAlbumList'], [
+        {'id': 2334, 'name': '很长很长的相册名'},
+        {'id': 2335, 'name': '很长很长的相册名'},
+      ]);
+      expect(response.statusCode, 201);
+      expect(response.contentLength, utf8.encode(patched).length);
+      expect(LocalMock.debugTrafficEntries().map((entry) => entry.mocked), [
+        false,
+        true,
+      ]);
+      expect(LocalMock.debugTrafficEntries().last.responseBody, patched);
+    },
+  );
+
+  test(
+    'out-of-range patches do not cancel valid indexed or wildcard patches',
+    () async {
+      backendBody = {
+        'data': {
+          'title': 'original',
+          'items': [
+            {'name': 'first'},
+            {'name': 'second'},
+          ],
+        },
+      };
+      replace(
+        patchBody: {
+          'data.title': 'changed',
+          'data.items[9].name': 'ignored',
+          'data.items[*].name': 'all',
+          'data.items[0].name': 'first only',
+          'data.items[5]': null,
+        },
+      );
+      final (response, body) = await send('/api/order');
+      expect(jsonDecode(body), {
+        'data': {
+          'title': 'changed',
+          'items': [
+            {'name': 'first only'},
+            {'name': 'all'},
+          ],
+        },
+      });
+      expect(response.statusCode, 201);
+      expect(response.headers.value('x-backend'), 'true');
+      expect(response.contentLength, utf8.encode(body).length);
+      expect(LocalMock.debugTrafficEntries().single.mocked, isTrue);
+    },
+  );
 
   test('body params and patch forward the unchanged request body', () async {
     replace(

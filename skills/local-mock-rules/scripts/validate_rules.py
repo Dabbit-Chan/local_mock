@@ -35,11 +35,11 @@ def _number(rule, key, low, high):
 
 def _field_path(path):
     if not re.fullmatch(
-        r"(?:[^.\[\]]+|\[(?:0|[1-9][0-9]*)\])(?:\[(?:0|[1-9][0-9]*)\]|\.[^.\[\]]+)*",
+        r"(?:[^.\[\]]+|\[(?:\*|0|[1-9][0-9]*)\])(?:\[(?:\*|0|[1-9][0-9]*)\]|\.[^.\[\]]+)*",
         path,
     ):
         raise ValueError(f"invalid field path: {path}")
-    normalized = re.sub(r"\[(0|[1-9][0-9]*)\]", r".\1", path).lstrip(".")
+    normalized = re.sub(r"\[(\*|0|[1-9][0-9]*)\]", r".\1", path).lstrip(".")
     if any(not segment.strip() for segment in normalized.split(".")):
         raise ValueError(f"invalid field path: {path}")
 

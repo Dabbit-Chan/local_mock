@@ -160,7 +160,18 @@ flutter build apk --profile \
 }
 ```
 
-补丁模式仍会访问真实接口；只替换 `data.product`，其他字段和 HTTP 状态码保留。支持 `data.items[0].name` 这样的数组路径。填写非空 `patchBody` 后，规则里的 `body`、`statusCode` 和 `headers` 不生效；`delayMs` 是取得真实响应后的额外延迟。接口不是 JSON、补丁父级不存在或数组越界时，保留整个原始响应，不做部分修改。
+补丁模式仍会访问真实接口；只替换 `data.product`，其他字段和 HTTP 状态码保留。支持 `data.items[0].name` 这样的数组路径，也支持 `data.items[*].name` 批量修改所有元素。填写非空 `patchBody` 后，规则里的 `body`、`statusCode` 和 `headers` 不生效；`delayMs` 是取得真实响应后的额外延迟。
+
+例如，下面填写在“字段补丁（可选）”中，就会修改所有相册名，同时修改标题：
+
+```json
+{
+  "data.sitePhotoAlbumList[*].name": "很长很长的相册名",
+  "data.siteBaseInfo.title": "测试标题很长很长很长"
+}
+```
+
+`[*]` 支持嵌套数组；空数组不修改。数组下标越界时只跳过对应路径 / 分支，其他补丁继续生效，不会扩展数组。例如只有 4 个相册时，`data.sitePhotoAlbumList[9].name` 会被跳过，但标题和其他相册的修改仍然保留。多个路径按填写顺序应用，可先用 `[*]` 批量修改，再用 `[0]` 单独覆盖第一个。接口不是 JSON、补丁父级不存在或类型不符时，仍保留整个原始响应。
 
 ### 只修改某个参数对应的返回值
 

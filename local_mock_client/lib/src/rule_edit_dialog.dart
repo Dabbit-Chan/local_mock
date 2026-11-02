@@ -299,8 +299,8 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
                       const SizedBox(height: 6),
                       Text(
                         _hasPatch
-                            ? '已启用字段补丁：请求真实接口，只修改指定字段；保留状态码、响应头和其他字段，整包响应体不生效。'
-                            : '填写“字段路径: 新值”即可只修改真实响应中的字段；支持 data.product 和 data.items[0].name，可与参数匹配组合使用。',
+                            ? '已启用字段补丁：请求真实接口，只修改指定字段；[*] 修改数组全部元素，越界下标自动跳过；保留状态码、响应头和其他字段，整包响应体不生效。'
+                            : '填写“字段路径: 新值”即可只修改真实响应中的字段；支持 data.product、data.items[0].name 和 data.items[*].name；越界下标自动跳过，可与参数匹配组合使用。',
                       ),
                       const SizedBox(height: 12),
                       Row(

@@ -137,6 +137,24 @@ void main() {
     expect(saved!['patchBody'], {'data.product.sku': 'fixed'});
   });
 
+  testWidgets('wildcard patches validate and save through the editor', (
+    tester,
+  ) async {
+    Map<String, dynamic>? saved;
+    await _openEditor(tester, onSaved: (result) => saved = result);
+    await tester.enterText(
+      find.widgetWithText(TextFormField, '字段补丁（可选）'),
+      '{"data.sitePhotoAlbumList[*].name":"很长很长的相册名"}',
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('[*] 修改数组全部元素'), findsOneWidget);
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(saved?['patchBody'], {
+      'data.sitePhotoAlbumList[*].name': '很长很长的相册名',
+    });
+  });
+
   testWidgets('invalid patch paths are rejected before saving', (tester) async {
     await _openEditor(tester);
     await tester.enterText(
@@ -190,7 +208,7 @@ void main() {
         {
           ..._initial,
           'params': {'id': 123},
-          'patchBody': {'data.product.sku': 'fixed'},
+          'patchBody': {'data.items[*].name': 'fixed'},
         },
       ]);
     await tester.pumpWidget(
@@ -207,6 +225,6 @@ void main() {
     await tester.pumpAndSettle();
     final exported = (jsonDecode(files.saved!) as List).single;
     expect(exported['params'], {'id': '123'});
-    expect(exported['patchBody'], {'data.product.sku': 'fixed'});
+    expect(exported['patchBody'], {'data.items[*].name': 'fixed'});
   });
 }

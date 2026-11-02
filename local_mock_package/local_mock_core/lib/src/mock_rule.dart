@@ -79,7 +79,7 @@ final class MockRule {
       throw const FormatException('patchBody must be an object');
     }
     for (final path in rawPatch.keys) {
-      _fieldPath(path);
+      _fieldPath(path, allowWildcard: true);
     }
     return MockRule._(
       id: id,
@@ -182,55 +182,59 @@ final class MockRule {
   dynamic applyPatch(dynamic responseBody) {
     final result = jsonDecode(jsonEncode(responseBody));
     for (final entry in patchBody.entries) {
-      final segments = _fieldPath(entry.key);
-      dynamic parent = result;
-      for (final segment in segments.take(segments.length - 1)) {
-        if (parent is Map && parent.containsKey(segment)) {
-          parent = parent[segment];
-        } else if (parent is List && _listIndex(segment, parent) != null) {
-          parent = parent[_listIndex(segment, parent)!];
+      final segments = _fieldPath(entry.key, allowWildcard: true);
+
+      dynamic applyTo(dynamic current, int offset) {
+        if (offset == segments.length) {
+          return jsonDecode(jsonEncode(entry.value));
+        }
+        final segment = segments[offset];
+        if (segment == '[*]') {
+          if (current is! List) {
+            throw FormatException(
+              'patchBody wildcard target is not an array: ${entry.key}',
+            );
+          }
+          for (var index = 0; index < current.length; index++) {
+            current[index] = applyTo(current[index], offset + 1);
+          }
+        } else if (current is Map &&
+            (offset == segments.length - 1 || current.containsKey(segment))) {
+          current[segment] = applyTo(current[segment], offset + 1);
+        } else if (current is List && RegExp(r'^-?[0-9]+$').hasMatch(segment)) {
+          final index = int.tryParse(segment);
+          if (index != null && index >= 0 && index < current.length) {
+            current[index] = applyTo(current[index], offset + 1);
+          }
         } else {
           throw FormatException(
-            'patchBody parent does not exist: ${entry.key}',
+            'patchBody target is not a container or parent is missing: ${entry.key}',
           );
         }
+        return current;
       }
-      final leaf = segments.last;
-      final value = jsonDecode(jsonEncode(entry.value));
-      if (parent is Map) {
-        parent[leaf] = value;
-      } else if (parent is List && _listIndex(leaf, parent) != null) {
-        parent[_listIndex(leaf, parent)!] = value;
-      } else {
-        throw FormatException(
-          'patchBody target is not a container: ${entry.key}',
-        );
-      }
+
+      applyTo(result, 0);
     }
     return result;
   }
 
-  static int? _listIndex(String segment, List<dynamic> list) {
-    final index = int.tryParse(segment);
-    return index != null && index >= 0 && index < list.length ? index : null;
-  }
-
-  static List<String> _fieldPath(String path) {
-    if (!RegExp(
-      r'^(?:[^.\[\]]+|\[(?:0|[1-9][0-9]*)\])(?:\[(?:0|[1-9][0-9]*)\]|\.[^.\[\]]+)*$',
-    ).hasMatch(path)) {
+  static List<String> _fieldPath(String path, {bool allowWildcard = false}) {
+    if ((!allowWildcard && path.contains('[*]')) ||
+        !RegExp(
+          r'^(?:[^.\[\]]+|\[(?:\*|0|[1-9][0-9]*)\])(?:\[(?:\*|0|[1-9][0-9]*)\]|\.[^.\[\]]+)*$',
+        ).hasMatch(path)) {
       throw FormatException('invalid field path: $path');
     }
     var normalized = path.replaceAllMapped(
-      RegExp(r'\[(0|[1-9][0-9]*)\]'),
-      (match) => '.${match[1]}',
+      RegExp(r'\[(\*|0|[1-9][0-9]*)\]'),
+      (match) => match[1] == '*' ? '.[*]' : '.${match[1]}',
     );
     if (path.startsWith('[') && normalized.startsWith('.')) {
       normalized = normalized.substring(1);
     }
     final segments = normalized.split('.');
-    if (segments.any((segment) => segment.trim().isEmpty) ||
-        normalized.contains(RegExp(r'[\[\]]'))) {
+    if (segments.any((segment) => segment.trim().isEmpty)) {
       throw FormatException('invalid field path: $path');
     }
     return segments;

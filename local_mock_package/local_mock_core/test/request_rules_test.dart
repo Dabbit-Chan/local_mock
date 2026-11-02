@@ -187,6 +187,291 @@ void main() {
     );
   });
 
+  test(
+    'wildcard patches every album name and keeps unrelated response fields',
+    () {
+      final parsed = MockRule.fromJson(
+        rule(patchBody: {'data.sitePhotoAlbumList[*].name': '很长很长的相册名'}),
+      );
+      final original = {
+        'code': '0',
+        'data': {
+          'title': 'original',
+          'sitePhotoAlbumList': [
+            {'id': 2334, 'name': '全部'},
+            {'id': 2335, 'name': '天然虾青素'},
+          ],
+        },
+      };
+      expect(parsed.applyPatch(original), {
+        'code': '0',
+        'data': {
+          'title': 'original',
+          'sitePhotoAlbumList': [
+            {'id': 2334, 'name': '很长很长的相册名'},
+            {'id': 2335, 'name': '很长很长的相册名'},
+          ],
+        },
+      });
+      expect((original['data'] as Map)['sitePhotoAlbumList'], [
+        {'id': 2334, 'name': '全部'},
+        {'id': 2335, 'name': '天然虾青素'},
+      ]);
+      expect(MockRule.fromJson(parsed.toJson()).patchBody, parsed.patchBody);
+    },
+  );
+
+  test('wildcards support nested arrays and a root array', () {
+    final parsed = MockRule.fromJson(rule(patchBody: {'[*][*].name': 'fixed'}));
+    expect(
+      parsed.applyPatch([
+        [
+          {'name': 'first'},
+          {'name': 'second'},
+        ],
+        [],
+        [
+          {'name': 'third'},
+        ],
+      ]),
+      [
+        [
+          {'name': 'fixed'},
+          {'name': 'fixed'},
+        ],
+        [],
+        [
+          {'name': 'fixed'},
+        ],
+      ],
+    );
+    final root = MockRule.fromJson(rule(patchBody: {'[*].name': 'fixed'}));
+    expect(
+      root.applyPatch([
+        {'id': 1},
+        {'id': 2},
+      ]),
+      [
+        {'id': 1, 'name': 'fixed'},
+        {'id': 2, 'name': 'fixed'},
+      ],
+    );
+  });
+
+  test('wildcard values are copied independently for every target', () {
+    for (final value in [
+      null,
+      123,
+      {
+        'nested': [1, 2],
+      },
+    ]) {
+      final parsed = MockRule.fromJson(rule(patchBody: {'[*]': value}));
+      final original = ['first', 'second'];
+      final patched = parsed.applyPatch(original) as List;
+      expect(patched, [value, value]);
+      expect(original, ['first', 'second']);
+      if (value is Map) {
+        patched.first['nested'][0] = 99;
+        expect(patched.last, {
+          'nested': [1, 2],
+        });
+        expect(parsed.patchBody['[*]'], {
+          'nested': [1, 2],
+        });
+        expect(parsed.applyPatch(original), [value, value]);
+      }
+    }
+  });
+
+  test('empty wildcard targets do not block other patches', () {
+    final parsed = MockRule.fromJson(
+      rule(patchBody: {'items[*].name': 'fixed', 'title': 'changed'}),
+    );
+    expect(parsed.applyPatch({'items': [], 'title': 'original'}), {
+      'items': [],
+      'title': 'changed',
+    });
+    expect(MockRule.fromJson(rule(patchBody: {'[*]': 1})).applyPatch([]), []);
+  });
+
+  test(
+    'out-of-range indices skip only their path regardless of patch order',
+    () {
+      for (final patch in [
+        {
+          'data.items[9].missing.parent': 'ignored',
+          'data.items[0].name': 'fixed',
+          'data.items[1]': null,
+          'data.items.99.name': 'ignored',
+          'data.items[999999999999999999999999999999]': 'ignored',
+          'data.title': 'changed',
+        },
+        {
+          'data.title': 'changed',
+          'data.items[0].name': 'fixed',
+          'data.items[9].name': 'ignored',
+        },
+      ]) {
+        final parsed = MockRule.fromJson(rule(patchBody: patch));
+        final original = {
+          'data': {
+            'items': [
+              {'name': 'original'},
+            ],
+            'title': 'original',
+          },
+        };
+        expect(parsed.applyPatch(original), {
+          'data': {
+            'items': [
+              {'name': 'fixed'},
+            ],
+            'title': 'changed',
+          },
+        });
+        expect(original['data']!['title'], 'original');
+      }
+      final skipped = MockRule.fromJson(
+        rule(patchBody: {'[0].name': 'ignored'}),
+      );
+      expect(skipped.applyPatch([]), []);
+    },
+  );
+
+  test(
+    'out-of-range indices in wildcard branches leave other targets intact',
+    () {
+      final parsed = MockRule.fromJson(
+        rule(
+          patchBody: {
+            'groups[*].items[1].name': 'fixed',
+            'groups[8].items[*].name': 'ignored',
+            'title': 'changed',
+          },
+        ),
+      );
+      expect(
+        parsed.applyPatch({
+          'title': 'original',
+          'groups': [
+            {
+              'items': [
+                {'name': 'first'},
+                {'name': 'second'},
+              ],
+            },
+            {'items': []},
+            {
+              'items': [
+                {'name': 'only'},
+              ],
+            },
+            {
+              'items': [
+                {'name': 'third'},
+                {'name': 'fourth'},
+              ],
+            },
+          ],
+        }),
+        {
+          'title': 'changed',
+          'groups': [
+            {
+              'items': [
+                {'name': 'first'},
+                {'name': 'fixed'},
+              ],
+            },
+            {'items': []},
+            {
+              'items': [
+                {'name': 'only'},
+              ],
+            },
+            {
+              'items': [
+                {'name': 'third'},
+                {'name': 'fixed'},
+              ],
+            },
+          ],
+        },
+      );
+    },
+  );
+
+  test('wildcards and indexed overrides apply in declaration order', () {
+    final parsed = MockRule.fromJson(
+      rule(
+        patchBody: {
+          'items[*].name': 'all',
+          'items[0].name': 'first only',
+          'items[9].name': 'ignored',
+        },
+      ),
+    );
+    expect(
+      parsed.applyPatch({
+        'items': [
+          {'name': 'first'},
+          {'name': 'second'},
+        ],
+      }),
+      {
+        'items': [
+          {'name': 'first only'},
+          {'name': 'all'},
+        ],
+      },
+    );
+    final literal = MockRule.fromJson(
+      rule(patchBody: {'data.*': 'literal key'}),
+    );
+    expect(
+      literal.applyPatch({
+        'data': {'*': 'original'},
+      }),
+      {
+        'data': {'*': 'literal key'},
+      },
+    );
+  });
+
+  test(
+    'wildcards require an array and do not add wildcard parameter matching',
+    () {
+      final parsed = MockRule.fromJson(
+        rule(patchBody: {'items[*].name': 'fixed'}),
+      );
+      for (final items in [
+        null,
+        1,
+        'text',
+        {'name': 'not an array'},
+      ]) {
+        expect(
+          () => parsed.applyPatch({'items': items}),
+          throwsFormatException,
+        );
+      }
+      final params = MockRule.fromJson(rule(params: {'items[*].id': 123}));
+      expect(
+        params.matches(
+          'GET',
+          uri,
+          requestBody: {
+            'items': [
+              {'id': 123},
+            ],
+          },
+        ),
+        isFalse,
+      );
+    },
+  );
+
   test('unusable patch is atomic and never mutates the original', () {
     final parsed = MockRule.fromJson(
       rule(patchBody: {'name': 'changed', 'missing.parent': 1}),
@@ -224,6 +509,10 @@ void main() {
         rule(patchBody: {'': 1}),
         rule(patchBody: {'data..id': 1}),
         rule(patchBody: {'data.items[-1]': 1}),
+        rule(patchBody: {'data.items[**].name': 1}),
+        rule(patchBody: {'data.items[*]name': 1}),
+        rule(patchBody: {'data.items[*].': 1}),
+        rule(patchBody: {'data.items[ * ].name': 1}),
       ]) {
         expect(() => MockRule.fromJson(invalid), throwsFormatException);
       }
