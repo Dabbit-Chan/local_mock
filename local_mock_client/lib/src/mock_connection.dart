@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:local_mock_core/local_mock_core.dart';
 import 'package:local_mock_transport/local_mock_transport.dart';
 
+import 'format.dart';
+
 class MockTarget {
   const MockTarget(
     this.id,
@@ -24,7 +26,7 @@ class MockConnection extends ChangeNotifier {
   bool _working = false;
   bool _disposed = false;
   int _generation = 0;
-  String _status = '未连接服务';
+  String _status = '未连接 Relay';
   List<MockTarget> _targets = [];
   String? _selectedId;
   int? _remoteRuleCount;
@@ -83,7 +85,7 @@ class MockConnection extends ChangeNotifier {
     disconnect();
     final generation = _generation;
     _working = true;
-    _status = '正在连接服务…';
+    _status = '正在连接 Relay…';
     _notify();
     try {
       final peer = await RelayPeer.connect(
@@ -100,14 +102,14 @@ class MockConnection extends ChangeNotifier {
       _peer = peer;
       _event({'event': 'devices', ...peer.helloResult});
       _working = false;
-      _status = '已连接服务，请选择在线设备';
+      _status = '已连接 Relay';
       _notify();
       unawaited(
         peer.done.then((_) {
           if (_peer != peer) return;
           final retry = _autoReconnect;
           disconnect();
-          _status = retry ? '服务连接已断开，自动重连中…' : '服务连接已断开，请重新连接';
+          _status = retry ? 'Relay 连接已断开，正在重连…' : 'Relay 连接已断开';
           _notify();
           if (retry) _scheduleRetry(address);
         }),
@@ -120,7 +122,9 @@ class MockConnection extends ChangeNotifier {
       final retry = _autoReconnect && generation == _generation && !_disposed;
       if (generation == _generation && !_disposed) {
         disconnect();
-        _status = retry ? '连接失败：$error，自动重连中…' : '连接失败：$error';
+        _status = retry
+            ? '无法连接 Relay（${describeError(error)}），2 秒后重试'
+            : '无法连接 Relay（${describeError(error)}）';
         _notify();
       }
       if (retry) _scheduleRetry(address);
@@ -155,7 +159,7 @@ class MockConnection extends ChangeNotifier {
       if (_selectedId != null &&
           !_targets.any((t) => t.id == _selectedId && t.online)) {
         if (recording) stopRecording();
-        _status = '设备已离线，保留规则与抓包记录';
+        _status = '设备已离线，显示的是断开前的数据';
       } else if (_selectedId != null && !_working) {
         _status = '设备在线';
       }
@@ -227,7 +231,9 @@ class MockConnection extends ChangeNotifier {
     Map<String, dynamic> args = const {},
   ]) {
     final peer = _peer;
-    if (peer == null || _selectedId == null) throw StateError('请先连接并选择在线设备');
+    if (peer == null || _selectedId == null) {
+      throw StateError('请先连接 Relay 并选择在线设备');
+    }
     return peer.request('command', {
       'deviceId': _selectedId,
       'method': method,
@@ -238,14 +244,14 @@ class MockConnection extends ChangeNotifier {
   Future<void> selectTarget(String id) async {
     if (!connected || _working) return;
     if (recording && id != _selectedId) {
-      throw StateError('请先停止并保存当前设备的录制');
+      throw StateError('正在录制另一台设备，请先停止录制');
     }
     if (!_targets.any((t) => t.id == id && t.online)) throw StateError('设备已离线');
     final generation = _generation;
     final previousId = _selectedId;
     _selectedId = id;
     _working = true;
-    _status = '正在读取设备状态…';
+    _status = '正在读取设备的规则和请求…';
     _notify();
     try {
       final state = await _command('getState');
@@ -256,7 +262,7 @@ class MockConnection extends ChangeNotifier {
     } catch (error) {
       if (generation == _generation) {
         _selectedId = previousId;
-        _status = '读取设备失败：$error';
+        _status = '读取设备失败：${describeError(error)}';
       }
       rethrow;
     } finally {
@@ -272,7 +278,9 @@ class MockConnection extends ChangeNotifier {
     if (ready &&
         !_supportsRecordingMocks &&
         parsed.any((rule) => rule.isRecording)) {
-      throw StateError('请更新目标 App 的 local_mock_core 和适配器以支持录制 Mock');
+      throw StateError(
+        '设备上的 local_mock 版本不支持录制组，请升级 App 中的 local_mock_core 和适配器',
+      );
     }
     _rules = parsed.map((rule) => rule.toJson()).toList();
     _editVersion++;
@@ -298,10 +306,10 @@ class MockConnection extends ChangeNotifier {
         final state = await _command('replaceRules', {'rules': _rules});
         if (generation != _generation) return;
         _remoteRuleCount = (state['rules'] as List).length;
-        _status = '已确认应用 $_remoteRuleCount 条规则，下一次请求生效';
+        _status = '设备已确认 $_remoteRuleCount 条规则，从下一个请求开始生效';
       } while (version != _editVersion);
     } catch (error) {
-      if (generation == _generation) _status = '同步失败：$error';
+      if (generation == _generation) _status = '同步失败：${describeError(error)}';
       rethrow;
     } finally {
       if (generation == _generation) {
@@ -312,7 +320,7 @@ class MockConnection extends ChangeNotifier {
   }
 
   Future<void> apply(String text) async {
-    if (!ready) throw StateError('请先选择就绪设备');
+    if (!ready) throw StateError('设备未就绪');
     await updateRules(text);
   }
 
@@ -328,9 +336,9 @@ class MockConnection extends ChangeNotifier {
   }
 
   void startRecording(String name) {
-    if (!ready || !captureAvailable) throw StateError('请先选择就绪设备');
-    if (recording) throw StateError('正在录制中');
-    if (_pendingRecording != null) throw StateError('请先保存上一段录制');
+    if (!ready || !captureAvailable) throw StateError('设备未就绪');
+    if (recording) throw StateError('已经在录制');
+    if (_pendingRecording != null) throw StateError('上一段录制尚未保存，请先保存或导出');
     if (name.trim().isEmpty) throw const FormatException('请输入录制名称');
     _recordingName = name.trim();
     _recordingTarget = _targets.singleWhere(
@@ -380,7 +388,7 @@ class MockConnection extends ChangeNotifier {
   }
 
   Future<void> clearTraffic() async {
-    if (!ready) throw StateError('请先选择就绪设备');
+    if (!ready) throw StateError('设备未就绪');
     final generation = _generation;
     _working = true;
     _notify();
@@ -407,7 +415,7 @@ class MockConnection extends ChangeNotifier {
     _selectedId = null;
     _remoteRuleCount = null;
     _supportsRecordingMocks = false;
-    _status = '未连接服务';
+    _status = '未连接 Relay';
     _notify();
   }
 

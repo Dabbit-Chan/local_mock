@@ -1,14 +1,16 @@
 # local_mock_http
 
-local_mock 的 `dart:io` 适配器，通过 `HttpOverrides` 拦截所有 `HttpClient`。在 Debug 和 Profile 模式默认生效，Release 始终禁用，Web 平台上是空操作。
+local_mock 的 `dart:io` 适配器。通过 `HttpOverrides` 包装应用创建的每个 `HttpClient`，因此覆盖：
 
-覆盖范围：
-
-- `package:http`（`IOClient`，移动端 / 桌面端默认实现）
+- `package:http`（移动端和桌面端默认的 `IOClient`）
 - Dio 默认的 `IOHttpClientAdapter`
 - 直接使用 `HttpClient` 的代码和三方库
 
+Debug / Profile 构建中生效；Release 构建和 Web 平台上不做任何事。
+
 ## 安装
+
+`local_mock_core` 和 `local_mock_transport` 没有发布到 pub.dev，需要用 `dependency_overrides` 一起指定来源：
 
 ```yaml
 dependencies:
@@ -18,58 +20,65 @@ dependencies:
       path: local_mock_package/local_mock_http
 
 dependency_overrides:
-  local_mock_transport:
-    git:
-      url: https://github.com/Dabbit-Chan/local_mock.git
-      path: local_mock_package/local_mock_transport
   local_mock_core:
     git:
       url: https://github.com/Dabbit-Chan/local_mock.git
       path: local_mock_package/local_mock_core
+  local_mock_transport:
+    git:
+      url: https://github.com/Dabbit-Chan/local_mock.git
+      path: local_mock_package/local_mock_transport
 ```
 
-`local_mock_core` 和 `local_mock_transport` 尚未发布到 pub.dev，需要通过 `dependency_overrides` 同时指定来源（git 或本地 `path`）。服务端与控制台启动方式见[根 README](../../README.md)。
-
-## 使用
+## 接入
 
 ```dart
 import 'package:local_mock_http/local_mock_http.dart';
 
 void main() {
-  HttpOverrides.global = MyProxyOverrides(); // 自己的 overrides（如有）先装
+  HttpOverrides.global = MyProxyOverrides(); // 自己的 overrides（如果有）先装
   LocalMockHttp.install();                   // 再装 local_mock
+  LocalMock.connect(
+    serverUrl: 'https://example.trycloudflare.com',
+    deviceId: installationId,
+    deviceName: 'QA Android',
+  );
   runApp(const MyApp());
 }
 ```
 
-- `install()` 会把当前的 `HttpOverrides` 保存为兜底，未命中规则的请求仍由原来的 overrides（代理、证书等）创建的客户端处理。
-- 只有调用之后创建的 `HttpClient` 会被拦截，所以要尽早在 `main()` 中调用。
-- 禁用模式和 Web 平台返回 `false`；重复调用不会重复安装。
-- 调用 `LocalMock.connect(serverUrl: ..., deviceId: ...)` 开始主动连接；Debug 和 Profile 默认启用。当前可行性测试不需要访问令牌。
-- 上报连接本身会排除在抓包与规则匹配之外。
+- `install()` 把当前的 `HttpOverrides` 保存下来作为兜底：没有命中规则的请求仍由原来的 overrides 创建的客户端处理，代理、证书配置不受影响。
+- 只有 **之后创建** 的 `HttpClient` 会被包装，所以要在 `main()` 里尽早调用。
+- Release 和 Web 上返回 `false`；重复调用不会重复安装。
+- 同时使用 Dio 默认适配器和 `local_mock_dio` 时，`local_mock_dio` 的拦截器先命中。只用 Dio 的项目建议用 `local_mock_dio`，可以保留 Dio 的拦截器链和 `response.extra` 标记。
 
-## 响应行为
+## 命中规则时
 
-- 命中普通规则时不建立连接，请求体被接收后丢弃。
-- `params` 支持 URL query、JSON / URL 编码表单请求体。存在同端点候选规则时，请求体先缓冲到 `close()` 再完整匹配；参数不匹配的请求按原字节、请求头和设置交给真实客户端，不会被丢弃。无候选规则的请求仍按原方式流式透传。
-- 非空 `patchBody` 会请求真实后端，再只修改指定 JSON 字段；保留真实 HTTP 状态和业务响应头，修正长度 / 压缩 / 校验头。非 JSON、路径不适用时返回完整原响应。补丁会缓冲 JSON 响应，不适用于 SSE / 下载流；路径语法见[核心规则说明](../local_mock_core/README.md#规则字段)。
-- 普通 Mock 的 `delayMs` 从请求 `close()` 时开始计算；字段补丁则在真实响应读取后额外延迟，取消仍会终止等待。
-- `HEAD` 请求和 `204` / `304` 状态码没有响应体。
+**整包替换**
+
+- 不建立网络连接；请求体照常接收后丢弃。
+- 返回规则的状态码、响应头和响应体字节（有录制原文时按原文返回）。`delayMs` 从请求 `close()` 时开始计算。
+- `HEAD` 请求以及 204、304 状态码不返回响应体。
 - 支持 `abort()` 和 `close(force: true)`（Dio 4 的取消方式）。
-- Mock 响应不支持重定向，`detachSocket()` 永不完成。
+- Mock 响应不支持重定向；`detachSocket()` 永远不会完成。
 
-## 抓包
+**字段补丁**
 
-所有经过该 overrides 创建的 `HttpClient` 的请求（Mock 命中与未命中走网络的）都会被记录，供桌面端“抓包”页实时展示、一键生成规则：
+- 发出真实请求，读取完整响应后应用补丁，再等待 `delayMs`。真实状态码和业务响应头保留；会修正长度、压缩、校验类响应头，并按新内容重新计算字节长度。
+- 响应不是 JSON 或补丁不适用时，返回完整的原始响应。
+- 补丁需要缓冲整个 JSON 响应，不适合 SSE 和大文件下载。
 
-- 未命中规则的请求由包装层透传字节并记录：请求体收集原始字节，响应体在流结束时按 content-type 转为文本；二进制响应只记录大小占位符。
-- 记录不影响请求本身的行为；在 Debug 和 Profile 模式生效。
-- 连接后实时上报到服务端，由新版 Web / 桌面控制台展示。
-- 新版 Web 控制台可将整段录制配置为一个可编辑 Mock 组，可选是否只匹配录制参数，组和子规则都可开关及排序。适配器在 `close()` 收集完请求体后匹配规则，保留可编辑的状态码、Content-Type 和原始文本字节；第一条匹配规则固定返回其响应，不按次数切换，全部未匹配时透传真实请求。需同步更新 core 和本适配器，具体边界见根 README 的“录制与回放”。
+**参数条件** 支持 URL query、JSON 或 URL 编码表单请求体。存在同端点候选规则时，请求体会先缓冲到 `close()` 再匹配；不匹配的请求以原始字节、请求头和设置交给真实客户端，不会丢失。没有候选规则的请求按原方式流式透传。
 
-## 与 local_mock_dio 一起使用
+规则字段和匹配细节见 [`local_mock_core` 的规则参考](../local_mock_core/README.md#规则参考)。
 
-Dio 使用默认适配器时，两个包都会生效，`local_mock_dio` 的拦截器先命中。只用 Dio 的项目建议接入 `local_mock_dio`，可以保留 Dio 的拦截器链和 `response.extra` 标记。
+## 请求记录
+
+所有经过包装的请求都会被记录并上报到控制台：
+
+- 走网络的请求透传字节，同时记录请求体和响应体；响应体在流结束时按 Content-Type 转成文本。
+- 二进制响应只记录为 `<binary N bytes>`。
+- 记录不改变请求本身的行为。与 Relay 之间的连接不被记录。
 
 ## 测试
 

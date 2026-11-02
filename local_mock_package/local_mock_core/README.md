@@ -1,91 +1,139 @@
 # local_mock_core
 
-local_mock 的核心包，与具体 HTTP 客户端无关。负责：
+与具体 HTTP 客户端无关的核心包：
 
-- Mock 规则模型（`MockRule`）的解析与校验
-- isolate 内的规则表与请求匹配（`LocalMock.match`）
-- 请求抓包记录（`LocalMock.beginTraffic` / `TrafficRecorder`）
-- App 主动连接服务端、上报流量、接收规则（`LocalMock.connect`）
-- Debug 模式保留旧 VM Service 扩展（`LocalMockProtocol`），新版控制台不依赖它
+- 规则模型 `MockRule`：解析、校验、匹配、字段补丁；
+- 规则表：每个 isolate 一份，内存保存；
+- 请求记录 `TrafficRecorder` / `TrafficEntry`，以及可序列化的录制 `TrafficSession`；
+- App 到 Relay 的连接入口 `LocalMock.connect`。
 
-业务 App 通常不直接依赖本包，而是使用 [`local_mock_dio`](../local_mock_dio/README.md) 或 [`local_mock_http`](../local_mock_http/README.md)，两者都会重新导出本包的 API。
+业务 App 一般不直接依赖本包，而是使用 [`local_mock_dio`](../local_mock_dio/README.md) 或 [`local_mock_http`](../local_mock_http/README.md)，它们会重新导出这里的 API。
 
-## 规则字段
+## 启用条件
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- | --- |
-| `id` | string | 是 | | 规则唯一 ID，列表内不能重复 |
-| `enabled` | bool | 否 | `true` | 是否启用 |
-| `method` | string | 是 | | HTTP 方法，只能是 ASCII 字母，大小写不敏感 |
-| `path` | string | 是 | | 以 `/` 开头的路径，精确匹配，不能带 `?` 或 `#` |
-| `host` | string | 否 | `null` | 主机名，大小写不敏感；不填则匹配任意 host |
-| `statusCode` | int | 否 | `200` | 响应状态码，范围 100..599 |
-| `delayMs` | int | 否 | `0` | 响应延迟毫秒数，范围 0..60000 |
-| `headers` | object | 否 | `{}` | 响应头，值必须为字符串 |
-| `body` | any | 否 | `null` | 任意 JSON 值，作为响应体 |
-| `params` | object | 否 | `{}` | 参数子集精确匹配，值为字符串 / 数字 / 布尔值 / null，解析后统一转为字符串 |
-| `patchBody` | object | 否 | `{}` | 字段路径到新 JSON 值的映射；非空时修改真实响应，而非整包替换 |
+`LocalMock.enabled == !kReleaseMode`：Debug 和 Profile 构建中启用，Release 构建中所有入口都是空操作（`connect` 返回 `false`，`match` 返回 `null`，不记录请求）。
 
-匹配规则：
+## 规则参考
 
-- 按顺序查找，第一条 `enabled` 且 `method`、`path`、`host`（如有）、`params`（如有）都匹配的规则生效；规则不会叠加。
-- `params` 留空时继续忽略参数。填写时逐项匹配，额外参数不影响结果；同名参数以 URL query 为准，没有时才查请求体。重复 query 中有一个值相等即可。
-- 请求体支持 JSON 对象、JSON 字符串和 URL 编码表单；Dio 适配器另外支持 `FormData` 普通字段。请求体可用 `filter.id`、`items[0].id` 定位嵌套值；不支持对整个对象 / 数组进行参数比较。缺失的键不会匹配 `null`。
-- 默认响应头为 `content-type: application/json; charset=utf-8`，可被 `headers` 覆盖；响应头名统一转小写。
-- 整个规则列表先完整校验再替换，任一规则不合法时保留原有规则不变。
+规则列表是一个 JSON 数组。整个数组先完整校验，任意一条不合法则整体拒绝，App 保留原有规则；ID 在列表内不能重复。
 
-响应补丁：
+### 普通规则
 
-- `patchBody: {"data.product": {...}}` 会先访问真实后端，再替换指定字段；对象 / 数组字段是整体替换，不递归合并。
-- 支持点分隔路径和非负数组下标，例如 `data.items[0].name`、`data.items.0.name`；`data.items[*].name` 修改全部元素，支持 `groups[*].items[*].name`、根数组 `[*].name` 以及用 `items[*]` 整体替换每个元素。通配符仅适用于数组，空数组不修改；不影响 `params` 的匹配语义。
-- 可设置 `null`、新增已有对象的叶子字段，但不创建缺失的父级，不扩展数组。不支持名称本身带点或方括号的字段。路径按填写顺序执行，每个目标使用新值的独立深拷贝，可先批量修改再用具体下标覆盖。
-- 数组下标越界只跳过对应路径 / 分支，不会使其他补丁失效；`groups[*].items[1].name` 中不足两个元素的 `items` 会跳过，其他分支继续处理。
-- 补丁在深拷贝上执行；除越界跳过外，路径父级不存在或类型不符（包括对非数组使用 `[*]`）时，适配器仍保留整个原始响应。非 JSON 响应同样透传，不伪造成功或吞掉网络错误。
-- 真实 HTTP 状态码和业务响应头保留，规则的 `body` / `statusCode` / `headers` 被忽略；适配器会移除失效的长度 / 校验头，HttpClient 重新计算字节长度。`delayMs` 是读取真实响应后的额外延迟。
-- 可以同时设置 `params` 与 `patchBody`，只补丁指定参数对应的响应。示例见[根 README](../../README.md#只修改真实响应中的字段)。
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `id` | string | 必填 | 非空，列表内唯一 |
+| `enabled` | bool | `true` | 关闭后不参与匹配 |
+| `method` | string | 必填 | 只含 ASCII 字母，不区分大小写 |
+| `path` | string | 必填 | 以 `/` 开头，不含 `?` 和 `#`；与请求路径完全相等才命中 |
+| `host` | string | 不限 | 不含端口，不区分大小写 |
+| `params` | object | `{}` | 参数条件，见下文。值只能是字符串、数字、布尔值或 `null` |
+| `statusCode` | int | `200` | 100–599 |
+| `delayMs` | int | `0` | 0–60000 |
+| `headers` | object | `{}` | 响应头，值必须是字符串 |
+| `body` | 任意 JSON | `null` | 响应体 |
+| `patchBody` | object | `{}` | 字段补丁，见下文。非空时规则变为“补丁”模式 |
+| `responseText` | string | — | 原始响应文本，由录制生成；存在时整包替换按原文返回，可保留非 JSON 文本 |
+| `recordedRequest` | object | — | 录制组内接口使用的录制参数：`{"query": {"k": ["v"]}, "body": "…"}` |
 
-## 连接服务端
+响应头默认带 `content-type: application/json; charset=utf-8`，可以在 `headers` 里覆盖；响应头名统一转小写。
 
-Debug 和 Profile 默认启用，Release 始终禁用，无需额外启用参数。
+### 匹配顺序
 
-```dart
-LocalMock.connect(
-  serverUrl: 'https://example.trycloudflare.com',
-  deviceId: installationId, // 由业务 App 持久化，每个安装 / isolate 唯一
-  deviceName: 'QA Android',
-);
-LocalMock.connected; // 当前上报通道是否已连接
-LocalMock.disconnect(); // 停止上报和重连，保留内存规则
+1. 自上而下遍历规则列表；录制组展开成组内接口，按组内顺序参与。
+2. 方法、路径相同，且 `host`（如果写了）相同，才算候选。
+3. 依次检查录制参数（仅录制组开启“只匹配录制时的传参”时）和 `params`。
+4. 第一条全部满足的规则生效。规则之间不叠加、不合并。
+
+没有任何规则命中时，请求照常走真实网络。
+
+### 参数条件 `params`
+
+`{"id": "123"}` 表示“请求里的 `id` 等于 123”。对每个键：
+
+- 先查 URL query。query 里有这个键时，只要其中一个值相等即可，**不再查请求体**。
+- query 里没有时查请求体。请求体支持 JSON 对象、JSON 字符串和 URL 编码表单；Dio 适配器还支持 `FormData` 的普通字段。
+- 键可以是嵌套路径：`filter.id`、`items[0].id`、`items.0.id`。请求体顶层恰好有一个带点的键时优先按原样匹配。
+- 比较时两边都转成字符串：`123` 和 `"123"` 相等。目标是对象或数组时不匹配；键缺失时不匹配（即使条件值是 `null`）。
+- 所有条件都满足才命中；请求里多出来的参数不影响。
+
+### 字段补丁 `patchBody`
+
+`patchBody` 非空时，规则不再整包替换，而是：先照常请求真实接口，拿到响应后改写其中的字段。真实的状态码、响应头和未提及的字段都保持不变；规则自身的 `statusCode`、`headers`、`body` 被忽略；`delayMs` 是在拿到真实响应 **之后** 额外等待的时间。
+
+```json
+{
+  "id": "site-long-names",
+  "method": "GET",
+  "path": "/api/site/home",
+  "patchBody": {
+    "data.sitePhotoAlbumList[*].name": "很长很长很长的相册名",
+    "data.sitePhotoAlbumList[0].name": "第一个单独改",
+    "data.siteBaseInfo.title": null
+  }
+}
 ```
 
-`connect` 在后台建立连接，网络不可用时每 2 秒重试，不等待连接建立；返回值表示是否启用了连接功能。无效配置在启用时会同步抛出异常。再次调用会替换旧连接。HTTP(S) 地址自动转换为 WS(S) `/ws/app`，也支持完整 WebSocket 地址。当前可行性测试不包含访问令牌。
+- 键是字段路径，值是新的 JSON 值（对象和数组整体替换，不做合并）。
+- 路径写法：`data.title`、`data.items[0].name`、`data.items.0.name`；`[*]` 表示数组的每个元素，可以嵌套（`groups[*].items[*].name`），也可以用在根数组上（`[*].name`）。
+- 按填写顺序依次应用，所以可以先用 `[*]` 批量改，再用 `[0]` 单独覆盖。
+- 可以给已有对象新增一个叶子字段；不会创建缺失的中间层，也不会扩展数组。
+- 数组下标越界：只跳过这一条路径（或 `[*]` 下的这一个分支），其他补丁照常生效。空数组上的 `[*]` 什么也不做。
+- 以下情况 **整个响应原样返回**，不做任何修改：响应不是 JSON、中间层不存在、类型不符（例如对对象用 `[*]`）。网络错误也照常抛出，不会被补丁变成成功。
+- 字段名本身含 `.` 或 `[` `]` 的字段无法定位。
+
+`params` 和 `patchBody` 可以同时使用：只改某个 ID 的响应中的某些字段。
+
+### 录制组
+
+```json
+{
+  "type": "recording",
+  "id": "recording-1730538207000",
+  "name": "下单流程",
+  "recordingId": "1730538207000",
+  "enabled": true,
+  "matchParams": false,
+  "rules": [ { "id": "request-1", "method": "POST", "path": "/api/order", "...": "…" } ]
+}
+```
+
+- `rules` 不能为空，只能包含普通规则（不能嵌套组）；组内 ID 在组内唯一，组 ID 在顶层唯一。
+- `enabled: false` 关闭整组。
+- `matchParams` 为 `true` 时，组内接口还要求请求的 query 和请求体与各自的 `recordedRequest` 一致：query 键顺序、JSON 对象键顺序和表单键顺序不影响比较。为 `false` 时忽略 `recordedRequest`。手写的 `params` 无论如何都生效。
+- `recordingMockFromSession(session, matchParams: …)` 从一段录制生成组：只使用 `TrafficSession.replayableEntries`；同一方法 + 域名 + 路径 + 传参的请求只保留最后开始的那一次；状态码、Content-Type、原始响应文本和耗时（最多 60 秒）作为默认值。
+- 设备通过状态里的 `supportsRecordingMocks: true` 表明支持录制组；不支持的设备收到含组的规则列表会整体拒绝。
 
 ## API
 
 ```dart
-import 'package:local_mock_core/local_mock_core.dart';
+// 连接 Relay。立即返回；失败时后台每 2 秒重试。再次调用会替换旧连接。
+LocalMock.connect(
+  serverUrl: 'https://example.trycloudflare.com', // http(s) 自动转为 ws(s)://…/ws/app，也可直接写 ws(s) 地址
+  deviceId: installationId,                       // 非空；每个 App 安装（每个 isolate）唯一且稳定
+  deviceName: 'QA Android',                       // 可选，默认等于 deviceId
+);
+LocalMock.connected;    // 上报通道当前是否连通
+LocalMock.disconnect(); // 停止上报和重连；内存中的规则保留
 
-// 初始化适配器；禁用模式返回 false。Debug 下额外注册 VM Service 扩展。
-LocalMock.ensureInitialized();
-
-// 查找匹配规则；禁用模式始终返回 null。
-final MockRule? rule = LocalMock.match('GET', uri, requestBody: requestData);
-if (rule != null) {
-  rule.statusCode;       // 状态码
-  rule.delayMs;          // 延迟
-  rule.responseHeaders;  // 含默认 content-type 的响应头
-  rule.bodyCopy;         // 响应体的深拷贝，可安全修改
-}
-
-// 开始记录一条请求（抓包）；禁用模式返回 null。
-final traffic = LocalMock.beginTraffic('GET', uri);
-// ... 请求结束后：
-traffic?.finish(statusCode: 200, contentType: 'application/json', body: text);
-// 或请求失败时：
-traffic?.fail(error);
+// 适配器使用
+LocalMock.ensureInitialized();                             // 禁用时返回 false
+final rule = LocalMock.match('GET', uri, requestBody: data); // 第一条命中的规则或 null
+LocalMock.hasCandidates('GET', uri);                       // 是否存在同端点的候选（用于决定是否缓冲请求体）
+LocalMock.candidates('GET', uri);                          // 同端点候选，录制组已展开
+final traffic = LocalMock.beginTraffic('GET', uri);       // 开始记录一个请求；禁用时为 null
 ```
 
-测试中可以绕过 VM Service 直接操作规则表和抓包缓冲：
+与 Relay 之间的连接本身会被识别出来，既不记录也不参与匹配。
+
+### 编写适配器
+
+1. 初始化时调用 `LocalMock.ensureInitialized()`。
+2. 请求发出前调用 `beginTraffic`，再用 `match(method, uri, requestBody: …)` 查找规则。请求体要等写完才能拿到时，先用 `hasCandidates` 判断，有候选再缓冲请求体，最后调用 `match`；没有候选就直接透传。
+3. 命中且 `rule.isPatch == false`：等待 `delayMs`，返回 `statusCode`、`responseHeaders` 和响应体。需要字节时用 `rule.responseText`（保留录制原文），需要对象时用 `rule.bodyCopy`（深拷贝，可随意修改）。
+4. 命中且 `rule.isPatch == true`：照常请求，对解码后的 JSON 调用 `rule.applyPatch(body)` 得到新对象；捕获 `FormatException` 时返回原始响应。改写后要移除失效的 `content-length`、校验类响应头。
+5. 请求结束时调用 `traffic.finish(…, mocked: …)` 或 `traffic.fail(error)`。二进制响应体请记录为 `<binary N bytes>` 这样的占位文本。
+
+### 测试辅助
 
 ```dart
 LocalMock.debugReplaceRules([{'id': 'a', 'method': 'GET', 'path': '/x'}]);
@@ -94,67 +142,53 @@ LocalMock.debugTrafficEntries();
 LocalMock.debugClearTraffic();
 ```
 
-## 编写自定义适配器
+## 请求记录
 
-1. 在适配器初始化时调用 `LocalMock.ensureInitialized()`。
-2. 每个请求发出前调用 `LocalMock.beginTraffic(method, uri)` 开始记录，并调用 `LocalMock.match(method, uri, requestBody: data)` 查找规则。若请求体尚未写入，可先取 `LocalMock.candidates(method, uri)`，体收集完成后按原顺序调用 `rule.matches(..., requestBody: data)`。
-3. 非补丁命中时按 `statusCode` / `delayMs` / `responseHeaders` / `bodyCopy` 构造响应；`rule.isPatch` 为真时走真实网络，再用 `rule.applyPatch(decodedBody)` 修改深拷贝，捕获 `FormatException` 后透传原响应。
-4. 用 `TrafficRecording.finish(mocked: true, ...)` 记录实际返回的 Mock / 补丁响应；其他请求结束时 `finish` / `fail` 记录真实结果。
+- 每条记录：序号 `revision`、开始时间、耗时、方法、完整 URI、host、path、请求体文本（尽力而为）、状态码、Content-Type、响应体文本、错误信息、是否由规则产生（`mocked`）。
+- App 内保留最近 500 条；连接 Relay 后先发送缓冲快照，之后实时上报每条完成的请求。
+- 请求体和响应体不截断；二进制内容只记录大小。
+- `TrafficRecorder(maxEntries:, onEntry:)` 可以独立使用。
 
-## 规则生命周期
+## 录制文件格式
 
-- App 规则仅保存在当前 isolate 内存，冷启动时为空。
-- relay 保存每台设备最后确认的规则；相同设备 ID 重新连接后自动恢复，不要求 Web 控制台在线。
-- Hot Restart / 冷启动应重新调用 `connect`。恢复前请求使用当前空规则表；relay 重启则丢失其内存状态。
-- 重复接入适配器不会清空当前 isolate 中的规则。
-
-## 抓包行为
-
-- 每条记录包含：方法、完整 URI、host、path、请求体（尽力而为）、状态码、耗时、响应体文本、是否 Mock、错误信息。
-- App 缓冲区保留最近 500 条；请求/响应体按适配器能力完整记录，不截断。
-- 连接后主动推送新记录，重连补发缓冲并按序号去重。控制连接本身不参与抓包或 Mock。
-- 独立使用 `TrafficRecorder` 时，可通过 `maxEntries` 配置数量上限、`onEntry` 订阅完成事件。
-- 二进制响应体不记录内容，只记录大小占位符（由适配器处理）。
-
-## 录制会话与分组 Mock
-
-- `TrafficSession` 是可序列化、带格式版本的录制会话，包含设备信息、录制起止时间和有序请求列表；`fromJson` 会校验整个文件，`toJson` 可用于保存或导出。会话保存在 Web 控制台当前浏览器，App 的 500 条缓冲上限不限制控制台正在进行的录制。
-- `recordingMockFromSession(session, matchParams: false)` 生成一个 `MockRule` 组。其 JSON 包含 `type: "recording"`、`id`、`name`、`recordingId`、`enabled`、`matchParams`、`rules`。子规则只允许普通响应 / 字段补丁，不允许嵌套组；导入会完整校验后才替换。组和子规则 ID 分别在各自列表中唯一。
-- 不使用独立的开始 / 停止回放命令；组通过现有 `replaceRules` 与普通规则一起下发和确认。App 状态使用 `supportsRecordingMocks: true` 表示支持，组复用普通规则的连接恢复与生命周期。
-- 子规则的 `recordedRequest` 保存原 query（字符串数组对象）及请求体文本。组的 `matchParams` 关闭时忽略这部分录制参数；开启时完整匹配 query / 请求体，JSON / 普通表单的对象键顺序不影响匹配。手工填写的 `params` 始终作为附加条件生效。
-- `LocalMock.match` 依次匹配顶层规则及组内子规则，第一条启用且匹配的响应生效，无顺序消费状态。生成时相同请求保留最后一次开始的请求响应，不同传参的请求保留独立子规则；忽略参数后由组内顺序确定优先级。
-- 自定义适配器使用 `LocalMock.hasCandidates` 判断是否需要延迟打开真实请求，收集请求体后调用 `LocalMock.match`。`LocalMock.candidates` 会展开启用组的子规则；返回字节应使用 `MockRule.responseText`，以保留原始文本而不是再次 JSON 编码。
-- Web 控制台以两级弹窗编辑录制 Mock 组及内部规则；编辑结果随规则导入导出，不修改 `TrafficSession` 原始记录。失败 / 二进制占位 / 不可还原请求不生成子规则；未命中任何规则仍可访问真实网络。
-
-## 旧 VM Service 协议（仅 Debug）
-
-协议版本：`LocalMockProtocol.version = 2`
-
-| 扩展方法 | 参数 | 说明 |
-| --- | --- | --- |
-| `ext.local_mock.getState` | 无 | 获取当前状态 |
-| `ext.local_mock.replaceRules` | `protocolVersion`：版本号字符串；`rules`：规则数组的 JSON 字符串 | 整体替换规则 |
-| `ext.local_mock.clear` | 无 | 清空规则 |
-| `ext.local_mock.getTraffic` | `sinceRevision`：非负整数（可选，默认 0） | 增量拉取抓包记录 |
-| `ext.local_mock.clearTraffic` | 无 | 清空抓包缓冲 |
-
-规则相关的三个方法成功时返回当前状态：
-
-```json
-{ "protocolVersion": 2, "revision": 3, "rules": [ ... ] }
-```
-
-抓包相关的两个方法返回抓包快照（`clearTraffic` 后 `entries` 为空，但 `trafficRevision` 继续递增，保证桌面端增量游标不回退）：
+`TrafficSession.toJson()` 产生控制台导出的录制文件：
 
 ```json
 {
-  "protocolVersion": 2,
-  "trafficRevision": 12,
-  "entries": [ { "revision": 11, "method": "GET", "uri": "...", "path": "/api/x", "statusCode": 200, "responseBody": "{...}", ... } ]
+  "format": "local_mock_capture",
+  "version": 1,
+  "id": "1730538207000",
+  "name": "下单流程",
+  "deviceId": "pixel-8-qa",
+  "deviceName": "Pixel 8 · QA",
+  "startedAt": 1730538207000,
+  "endedAt": 1730538251000,
+  "entries": [ { "revision": 1, "method": "POST", "uri": "https://…", "...": "…" } ]
 }
 ```
 
-参数不合法时返回 `invalidParams` 错误，`message` 字段说明原因。此接口保留给已有自定义工具；新版 Web 控制台使用独立的主动上报协议。
+`TrafficSession.fromJson` 完整校验文件（格式标记、版本、时间、每条请求的字段与 URL），任何一处不合法都会拒绝整个文件。`replayableEntries` 返回可以生成 Mock 的请求：成功、有响应体（HEAD / 204 / 304 除外），且请求体和响应体都不是占位文本。
+
+## 规则的生命周期
+
+- 规则只保存在当前 isolate 的内存中，App 冷启动或 Hot Restart 后为空。
+- Relay 记住每台设备最后一次确认的规则；同一 `deviceId` 重新连接时自动推回。恢复完成之前发出的请求不会被 Mock。
+- Relay 重启后不再记得规则；App 重连时以 App 当前的规则为准。
+- 重复接入适配器不会清空规则。
+
+## 旧版 VM Service 接口
+
+Debug 模式下还会注册以下 VM Service 扩展（协议版本 `LocalMockProtocol.version == 2`），供已有的自定义工具使用；Web 控制台不依赖它们。
+
+| 方法 | 参数 | 返回 |
+| --- | --- | --- |
+| `ext.local_mock.getState` | — | `{protocolVersion, revision, rules}` |
+| `ext.local_mock.replaceRules` | `protocolVersion`、`rules`（规则数组的 JSON 字符串） | 同上 |
+| `ext.local_mock.clear` | — | 同上 |
+| `ext.local_mock.getTraffic` | `sinceRevision`（非负整数，默认 0） | `{protocolVersion, trafficRevision, entries}` |
+| `ext.local_mock.clearTraffic` | — | 同上，`entries` 为空，`trafficRevision` 不回退 |
+
+参数不合法时返回 `invalidParams` 错误，`message` 说明原因。
 
 ## 测试
 

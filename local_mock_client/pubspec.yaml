@@ -1,5 +1,5 @@
 name: local_mock_client
-description: Web controller for app-initiated local_mock sessions.
+description: local_mock web console — inspect app requests and push mock rules.
 publish_to: none
 version: 0.3.0+1
 
@@ -13,9 +13,11 @@ dependencies:
     path: ../local_mock_package/local_mock_core
   local_mock_transport:
     path: ../local_mock_package/local_mock_transport
-  flutter_reorderable_grid_view: ^5.7.0
   mime: ^2.0.0
   web: ^1.1.1
+  re_editor: ^0.10.0
+  re_highlight: ^0.0.3
+  go_router: ^18.1.2
 
 dev_dependencies:
   local_mock_http:
@@ -26,3 +28,20 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/JetBrainsMono-SemiBold.ttf
+          weight: 600

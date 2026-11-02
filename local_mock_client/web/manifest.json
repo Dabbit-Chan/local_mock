@@ -3,9 +3,9 @@
     "short_name": "Local Mock",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "Manage app mock rules and captured requests.",
+    "background_color": "#FFFFFF",
+    "theme_color": "#111111",
+    "description": "local_mock 控制台：查看 Flutter App 的请求，编写并下发 Mock 规则。",
     "orientation": "any",
     "prefer_related_applications": false,
     "icons": [

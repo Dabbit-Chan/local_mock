@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Validate local_mock rules with the same constraints as MockRule.parseList.
 
-Accepts a single rule object, comma-separated rule objects, or a JSON array.
+Accepts a single rule object, comma-separated rule objects, or a JSON array
+(including recording groups from files exported by the console).
 
 Usage:
   python3 validate_rules.py rules.json
@@ -44,9 +45,55 @@ def _field_path(path):
         raise ValueError(f"invalid field path: {path}")
 
 
+def _recorded_request(value):
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("query"), dict)
+        or (value.get("body") is not None and not isinstance(value["body"], str))
+    ):
+        raise ValueError("recordedRequest must contain query and optional body text")
+    for item in value["query"].values():
+        if not isinstance(item, list) or any(not isinstance(v, str) for v in item):
+            raise ValueError("recorded query values must be string arrays")
+
+
+def _validate_list(rules, children=False):
+    ids = set()
+    for index, rule in enumerate(rules):
+        label = f"rules[{index}]" if children else f"rule[{index}]"
+        try:
+            if children and isinstance(rule, dict) and rule.get("type") is not None:
+                raise ValueError("recording Mock can only contain response rules")
+            rule_id = validate_rule(rule)
+        except ValueError as error:
+            raise ValueError(f"{label}: {error}") from None
+        if rule_id in ids:
+            raise ValueError(f"{label}: duplicate rule ID: {rule_id}")
+        ids.add(rule_id)
+
+
+def _validate_group(rule):
+    """A recording group exported by the console (type: recording)."""
+    rule_id = _text(rule, "id")
+    _text(rule, "name")
+    _text(rule, "recordingId")
+    if not isinstance(rule.get("enabled", True), bool):
+        raise ValueError("enabled must be a boolean")
+    match_params = rule.get("matchParams", False)
+    children = rule.get("rules")
+    if not isinstance(match_params, bool) or not isinstance(children, list) or not children:
+        raise ValueError("recording Mock needs rules and a boolean matchParams")
+    _validate_list(children, children=True)
+    return rule_id
+
+
 def validate_rule(rule):
     if not isinstance(rule, dict):
         raise ValueError("each rule must be an object")
+    if rule.get("type") == "recording":
+        return _validate_group(rule)
+    if rule.get("type") is not None:
+        raise ValueError("unknown rule type")
     rule_id = _text(rule, "id")
     method = _text(rule, "method")
     if not re.fullmatch(r"[A-Za-z]+", method):
@@ -87,6 +134,12 @@ def validate_rule(rule):
         _field_path(field_path)
     _number(rule, "statusCode", 100, 599)
     _number(rule, "delayMs", 0, 60000)
+    if rule.get("responseText") is not None and not isinstance(
+        rule["responseText"], str
+    ):
+        raise ValueError("responseText must be a string")
+    if rule.get("recordedRequest") is not None:
+        _recorded_request(rule["recordedRequest"])
     return rule_id
 
 
@@ -103,25 +156,17 @@ def parse(text):
 def validate(data):
     if not isinstance(data, list):
         raise ValueError("rules must be JSON objects or an array of objects")
-    ids = set()
-    for index, rule in enumerate(data):
-        try:
-            rule_id = validate_rule(rule)
-        except ValueError as error:
-            raise ValueError(f"rule[{index}]: {error}") from None
-        if rule_id in ids:
-            raise ValueError(f"rule[{index}]: duplicate rule ID: {rule_id}")
-        ids.add(rule_id)
+    _validate_list(data)
     return len(data)
 
 
 def main():
     try:
         if len(sys.argv) > 1:
-            with open(sys.argv[1], encoding="utf-8") as file:
+            with open(sys.argv[1], encoding="utf-8-sig") as file:
                 text = file.read()
         else:
-            text = sys.stdin.read()
+            text = sys.stdin.read().lstrip("\ufeff")
         count = validate(parse(text))
     except (OSError, json.JSONDecodeError, ValueError) as error:
         print(f"INVALID: {error}", file=sys.stderr)

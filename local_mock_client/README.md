@@ -1,106 +1,103 @@
 # local_mock_client
 
-Flutter Web 控制台，复用规则编辑、抓包详情、从请求生成规则等界面。目标 App 主动连接同一个 WebSocket relay，控制台选择设备后下发规则。
+local_mock 的 Web 控制台和 Relay。使用方法见[根目录 README](../README.md)，这里说明这个包本身：怎么运行、代码怎么组织、界面遵循什么约定。
 
-当前只保留 Web，不再提供 macOS / Windows 应用，也不需要独立的 `local_mock_server` 项目。
-
-## 本地可行性测试
-
-浏览器不能监听来自手机的 WebSocket，因此 `flutter run -d chrome` 的开发服务器不能直接作为 App 接入端。项目提供同目录下的 `tool/relay_host.dart`：它是一个本地开发启动脚本，同时托管 Web 构建产物和 App / 控制台 WebSocket 连接。
-
-终端一：
+## 运行
 
 ```bash
-cd local_mock_client
 flutter pub get
 flutter build web --no-web-resources-cdn
 dart run tool/relay_host.dart 9090
 ```
 
-终端二打开：
+打开 <http://127.0.0.1:9090/>。
 
-```text
-http://127.0.0.1:9090/
+`tool/relay_host.dart` 是一个独立的 Dart 进程：
+
+- `GET /…` 托管 `build/web` 里的控制台（每次请求从磁盘读取，重新 `flutter build web` 后刷新页面即可）；
+- `/ws/app` 接收 App 连接，`/ws/console` 接收控制台连接；
+- 在内存里保存每台设备最后确认的规则和最近 500 条请求。
+
+控制台总是连接 **提供它的那个地址**（`Uri.base.origin`），所以页面本身没有地址输入框，构建时也不需要 `--dart-define`。`LOCAL_MOCK_SERVER` 只给 App 用。
+
+只调界面时可以 `flutter run -d chrome`，但开发服务器不是 Relay，页面会一直显示“正在连接 Relay”。需要真实数据时用 Relay 托管的构建。
+
+## 页面
+
+路由使用 `go_router` 的 hash 模式，任何静态服务器都能直接打开深链接。
+
+| 路由 | 页面 | 内容 |
+| --- | --- | --- |
+| `/#/` | `HomePage` | 01 设备列表（在线 / 离线，点击进入调试）· 02 本地录制；没有设备时显示接入步骤和当前 Relay 地址对应的 `LocalMock.connect` 代码 |
+| `/#/devices/:deviceId` | `DevicePage` | 三列工作区：01 规则 · 02 请求 · 03 详情（请求详情 / 规则编辑器 / 录制组编辑器） |
+| `/#/recordings/:id` | `RecordingPage` | 离线查看一段录制：概要、请求列表、请求详情，可导出或删除 |
+
+调试页的路由参数就是设备 ID。打开时如果该设备在线，控制台会自动切换到它；Relay 重连后也会自动切回。设备离线时保留断开前的规则和请求，并在页面顶部说明。
+
+界面按浏览器全屏设计（建议宽度 ≥ 1280px），不考虑窄屏。
+
+## 代码结构
+
+```
+lib/
+  main.dart                    入口
+  src/
+    app.dart                   LocalMockApp、路由、AppServices、页面框架（顶栏）
+    mock_connection.dart       控制台到 Relay 的连接：设备列表、选择设备、同步规则、请求流、录制
+    rule_book.dart             当前设备的有序规则列表；每次修改都推送到设备
+    recording_library.dart     浏览器内保存的录制；录制结束后自动保存
+    rule_drafts.dart           从请求 / 录制生成规则草稿
+    capture_session_store*.dart  录制的 localStorage 读写和文件导入导出
+    rule_file_transfer*.dart   浏览器文件选择与下载
+    preferences*.dart          外观偏好的持久化
+    format.dart                时间、JSON、错误信息格式化
+    pages/                     三个路由页面
+    panes/                     调试页的各列：规则、请求、请求详情、规则编辑器、录制组编辑器
+    ui/
+      theme.dart               设计令牌（Palette、Space）和 ThemeData
+      primitives.dart          基础组件：分隔线、标签、方形开关、列表行、提示条、确认框
+      code_panel.dart          基于 re_editor 的 JSON 查看 / 编辑器
 ```
 
-终端三由你自己运行：
+状态分两层：
 
-```bash
-cloudflared tunnel --url http://127.0.0.1:9090
-```
+- **页面级服务**（`AppServices`，经 `AppScope` 提供）：`MockConnection`、`RuleBook`、`RecordingLibrary`、`ThemeController`。它们在整个页面生命周期内存在，所以录制可以在页面之间切换时继续进行。
+- **调试页本地状态**：第 03 列当前显示什么（`Inspect`），以及编辑器里是否有未保存的修改。切换选中项前如果有未保存修改，会先确认。
 
-目标 App 使用 cloudflared 输出的 HTTPS 地址连接：
+规则编辑的并发保护：保存时按对象身份查找原规则。如果设备在编辑期间推送了新的规则列表，保存会失败并提示重新打开；如果编辑器没有改动，会自动切换到设备的新版本。
 
-```dart
-LocalMock.connect(
-  serverUrl: 'https://example.trycloudflare.com',
-  deviceId: installationId,
-  deviceName: 'QA Android',
-);
-```
+## 界面约定
 
-HTTPS 会自动转换成 `wss://example.trycloudflare.com/ws/app`。Web 页面会连接同一地址的 `/ws/console`。**没有访问令牌。** 这是可行性测试，隧道地址的访问者都可以修改规则。
+风格是 Swiss International Style：
 
-不要把 cloudflared 指向 `flutter run -d chrome` 的端口；Flutter 开发服务器只提供页面，不能处理本项目的 App WebSocket 协议。
+- **网格与分栏**：页面按 12 列分配（首页 8 / 4，调试页 3 / 4 / 5），栏间用 1px 细线分隔，不使用卡片和阴影。
+- **字体**：Inter（界面）和 JetBrains Mono（代码、路径、时间），随包打包在 `assets/fonts`，中文回退到系统字体。左对齐，大字号标题，章节用 `01` `02` `03` 编号。
+- **颜色**：墨色与纸色两种中性色，加一个信号红。红色只用于“正在发生或需要注意”的东西：录制中、Mock 响应、错误、品牌标记。
+- **形状**：所有元素直角。开关、筛选按钮、模式切换都是方形。
+- **明暗模式**：顶栏右侧按钮在“跟随系统 / 浅色 / 深色”之间切换，选择保存在 localStorage。两套配色定义在 `Palette.light` / `Palette.dark`。
 
-如果只想单独调试页面，可以运行：
+所有 JSON 的展示与编辑都使用 `CodePanel`（[re_editor](https://pub.dev/packages/re_editor)）：语法高亮、行号、折叠、查找（⌘/Ctrl F）、右键菜单、格式化，以及输入时的 JSON 校验（错误定位到行列）。编辑器中按 ⌘/Ctrl S 保存。
 
-```bash
-flutter run -d chrome
-```
+新增界面时：间距用 `Space` 中的常量，颜色从 `context.palette` 取，不直接写颜色值；列表行用 `ListRow`，空状态用 `EmptyState`，需要用户确认的破坏性操作用 `confirm(..., destructive: true)`。
 
-部署后的页面（由 relay 托管 `build/web`）打开后自动连接同源 relay 开始监听，连接失败或断开时每 2 秒自动重连，页面上没有地址输入框，构建时也不需要任何 `--dart-define`。`flutter run -d chrome` 的开发服务器不是 relay，自动连接会持续失败；这种模式只适合单独调试页面 UI，要连真实设备请用 relay 托管部署。
-
-## 控制台行为
-
-- 页面部署后打开即自动连接同源 relay 开始监听，连接失败或断开时自动重连，无需任何手动操作。`LOCAL_MOCK_SERVER` 只用于目标 App，控制台不识别它。
-- App 在线后自动出现在设备列表；多台设备时手动选择。
-- 选择设备后加载该设备规则和抓包记录，不会把上一台设备的规则混过去。
-- 规则保存、开关、删除和排序变更后自动同步，App 确认后生效。
-- 规则编辑器支持“参数匹配（可选）”和“字段补丁（可选）”：前者只命中指定 query / JSON / 表单参数，后者在真实响应上只修改指定字段；可独立使用或组合。参数精确规则需要放在通用规则前面。
-- 非空字段补丁会禁用整包响应体、状态码和响应头编辑，避免误以为它们会覆盖真实结果；规则卡片展示参数条件和补丁内容。使用这两个新字段前需同步更新目标 App 的 core / 适配器。
-- 字段补丁支持 `data.sitePhotoAlbumList[*].name` 批量修改数组所有元素，支持嵌套 `[*]`；下标越界只跳过对应路径 / 分支，不影响其余补丁，空数组不修改。
-- “清空手机规则”旁提供“导入规则”和“导出规则”：导出当前全部规则为 JSON 文件（保留顺序及启用状态），可用于备份或分享；导入时选择 JSON 规则数组文件，校验通过并确认后替换当前全部规则，并沿用自动同步机制。取消或文件无效不会修改规则，导入空数组会清空当前规则。
-- 抓包由 App 持续上报，不依赖当前是否打开抓包页面；保留最近 500 条。
-- 抓包页支持“开始录制 / 停止并保存”，会话独立收集完成事件，不受 500 条实时列表限制；可命名、离线查看、删除、JSON 导入导出。保存使用当前浏览器的站点存储，切换域名或端口前请导出备份。
-- 选择已保存会话后点击“回放 / 配置 Mock”，整段录制生成规则页中的一个录制 Mock 组。一级弹窗可选择是否“只 Mock 录制时的传参”，并开关、删除、排序组内接口；接口编辑打开二级规则弹窗，支持修改录制参数及响应内容，二级保存只是草稿，一级保存后才同步。
-- 录制 Mock 卡片与普通规则共用顶层顺序，可整组开关、编辑、删除、导入导出。相同传参重复录制保留最后一次响应，不按次数轮换响应；忽略录制参数时，按组内顺序命中第一条。原始录制不被改写，编辑后的 Mock 请使用“导出规则”备份。
-- 设备断开会停止录制并保存已收到的记录；保存失败保留未保存会话，支持重试或导出。已启用的录制 Mock 与普通规则使用相同生命周期。需要同时更新 relay、App core 和适配器；旧 App 会提示升级。
-- Web 页面断开不会清空 App 规则。relay 重启会丢失内存状态，App 重连后重新上报。
-
-详细匹配方式、录制边界和限制见[根 README 的“录制与回放”](../README.md#录制与回放)。录制可能包含敏感请求 / 响应数据，请谨慎保存和分享。
-
-## App 接入
-
-适配器接入和构建模式见[根 README](../README.md#目标-app-接入)。连接方法不需要令牌：
-
-```dart
-LocalMock.connect(
-  serverUrl: serverAddress,
-  deviceId: installationId,
-  deviceName: 'QA Android',
-);
-```
-
-## 构建与测试
+## 测试
 
 ```bash
 flutter analyze
 flutter test
-flutter build web --no-web-resources-cdn
 ```
 
-构建产物在 `build/web`。`tool/relay_host.dart` 需要先完成 Web 构建再运行。
+- `test/device_page_test.dart`、`test/home_and_recordings_test.dart`：界面行为，使用 `test/support/harness.dart` 中的 `FakeConnection`（一台就绪的设备 `phone`，记录推送的规则）。
+- `test/rules_logic_test.dart`：`RuleBook` 和规则草稿的逻辑。
+- `test/mock_connection_test.dart`、`test/http_outbound_connection_test.dart`：启动真实 Relay，验证连接、同步、重连和请求流。
 
-浏览器网络用例需要一个已运行的 relay：
+浏览器平台的测试：
 
 ```bash
+# 录制在 localStorage 中的持久化
+flutter test --platform chrome test/capture_session_browser_test.dart
+
+# 浏览器连接真实 Relay（先启动 dart run tool/relay_host.dart 9090）
 flutter test --platform chrome test/browser_connection_test.dart \
   --dart-define=LOCAL_MOCK_TEST_SERVER=http://127.0.0.1:9090
-```
-
-浏览器持久化测试不依赖 relay：
-
-```bash
-flutter test --platform chrome test/capture_session_browser_test.dart
 ```
