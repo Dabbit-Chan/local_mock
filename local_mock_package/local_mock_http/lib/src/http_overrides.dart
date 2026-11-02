@@ -36,8 +36,8 @@ final class _MockHttpClient implements HttpClient {
   @override
   Future<HttpClientRequest> openUrl(String method, Uri url) {
     final traffic = LocalMock.beginTraffic(method, url);
-    final rule = LocalMock.match(method, url);
-    if (rule == null) {
+    final candidates = LocalMock.candidates(method, url);
+    if (candidates.isEmpty) {
       final opening = _inner.openUrl(method, url);
       if (traffic == null) return opening;
       return opening.then(
@@ -46,7 +46,14 @@ final class _MockHttpClient implements HttpClient {
       );
     }
     if (_closed) throw StateError('Client is closed');
-    final request = _MockRequest(method, url, rule, _pending.remove, traffic);
+    final request = _MockRequest(
+      method,
+      url,
+      candidates,
+      () => _inner.openUrl(method, url),
+      _pending.remove,
+      traffic,
+    );
     _pending.add(request);
     return Future.value(request);
   }
@@ -67,7 +74,7 @@ final class _MockHttpClient implements HttpClient {
       path: reference.path,
       query: reference.hasQuery ? reference.query : null,
     );
-    if (LocalMock.match(method, url) == null) {
+    if (LocalMock.candidates(method, url).isEmpty) {
       final traffic = LocalMock.beginTraffic(method, url);
       final opening = _inner.open(method, host, port, path);
       if (traffic == null) return opening;
@@ -195,14 +202,12 @@ final class _MockHttpClient implements HttpClient {
   set keyLog(Function(String line)? callback) => _inner.keyLog = callback;
 }
 
-/// Request body is collected for the capture view, then discarded. The rule
-/// delay starts at [close], so client receive timeouts behave like a slow
-/// server.
 final class _MockRequest implements HttpClientRequest {
   _MockRequest(
     this.method,
     this.uri,
-    this._rule,
+    this._candidates,
+    this._openReal,
     this._onFinish,
     this._traffic,
   ) {
@@ -210,11 +215,17 @@ final class _MockRequest implements HttpClientRequest {
     _done.future.ignore();
   }
 
-  final MockRule _rule;
+  final List<MockRule> _candidates;
+  final Future<HttpClientRequest> Function() _openReal;
   final TrafficRecording? _traffic;
   final void Function(_MockRequest) _onFinish;
   final _done = Completer<HttpClientResponse>();
+  final _body = BytesBuilder();
+  HttpClientRequest? _realRequest;
+  Completer<void>? _delay;
   Timer? _timer;
+  bool _started = false;
+  bool _mocked = false;
 
   @override
   final String method;
@@ -238,37 +249,146 @@ final class _MockRequest implements HttpClientRequest {
   Encoding encoding = utf8;
 
   @override
-  HttpConnectionInfo? get connectionInfo => null;
+  HttpConnectionInfo? get connectionInfo => _realRequest?.connectionInfo;
 
   @override
   Future<HttpClientResponse> get done => _done.future;
 
   @override
   Future<HttpClientResponse> close() {
-    if (!_done.isCompleted) {
-      _timer ??= Timer(Duration(milliseconds: _rule.delayMs), () {
-        if (_done.isCompleted) return;
-        _onFinish(this);
-        _traffic?.finish(
-          mocked: true,
-          statusCode: _rule.statusCode,
-          contentType: _rule.responseHeaders['content-type'],
-          body: jsonEncode(_rule.body),
-        );
-        _done.complete(_MockResponse(method, _rule));
-      });
+    if (!_started && !_done.isCompleted) {
+      _started = true;
+      _respond().then(
+        (response) {
+          if (_done.isCompleted) return;
+          _onFinish(this);
+          _done.complete(response);
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (_done.isCompleted) return;
+          _realRequest?.abort(error, stackTrace);
+          _onFinish(this);
+          _traffic?.fail(error, mocked: _mocked);
+          _done.completeError(error, stackTrace);
+        },
+      );
     }
     return done;
+  }
+
+  Future<void> _wait(int milliseconds) async {
+    if (milliseconds > 0) {
+      _delay = Completer<void>();
+      _timer = Timer(Duration(milliseconds: milliseconds), _delay!.complete);
+      await _delay!.future;
+    }
+    if (_done.isCompleted) {
+      throw const HttpException('Request has been aborted');
+    }
+  }
+
+  Future<HttpClientResponse> _respond() async {
+    final bytes = _body.takeBytes();
+    final requestBody = utf8.decode(bytes, allowMalformed: true);
+    MockRule? rule;
+    for (final candidate in _candidates) {
+      if (candidate.matches(method, uri, requestBody: requestBody)) {
+        rule = candidate;
+        break;
+      }
+    }
+    if (rule != null && !rule.isPatch) {
+      _mocked = true;
+      await _wait(rule.delayMs);
+      _traffic?.finish(
+        mocked: true,
+        statusCode: rule.statusCode,
+        contentType: rule.responseHeaders['content-type'],
+        body: jsonEncode(rule.body),
+      );
+      return _MockResponse(method, rule);
+    }
+
+    final request = _realRequest = await _openReal();
+    request.done.ignore();
+    if (_done.isCompleted) {
+      request.abort();
+      throw const HttpException('Request has been aborted');
+    }
+    request
+      ..persistentConnection = persistentConnection
+      ..followRedirects = followRedirects
+      ..maxRedirects = maxRedirects
+      ..bufferOutput = bufferOutput
+      ..contentLength = contentLength;
+    headers.forEach(request.headers.set);
+    if (headers.host != null) request.headers.host = headers.host!;
+    if (headers.port != null) request.headers.port = headers.port!;
+    request.cookies.addAll(cookies);
+    if (bytes.isNotEmpty) request.add(bytes);
+    final response = await request.close();
+    final mime = response.headers.contentType?.mimeType.toLowerCase();
+    if (rule == null ||
+        method.toUpperCase() == 'HEAD' ||
+        response.statusCode == 204 ||
+        response.statusCode == 304 ||
+        (mime != null &&
+            mime != 'application/json' &&
+            !mime.endsWith('+json'))) {
+      return _traffic == null
+          ? response
+          : _RecordingHttpClientResponse(response, _traffic);
+    }
+
+    final received = BytesBuilder(copy: false);
+    await for (final chunk in response) {
+      received.add(chunk);
+    }
+    var responseBytes = received.takeBytes();
+    HttpHeaders? patchedHeaders;
+    try {
+      final patched = rule.applyPatch(jsonDecode(utf8.decode(responseBytes)));
+      responseBytes = utf8.encode(jsonEncode(patched));
+      final updated = _MockHeaders();
+      response.headers.forEach(updated.set);
+      updated
+        ..removeAll(HttpHeaders.contentEncodingHeader)
+        ..removeAll(HttpHeaders.transferEncodingHeader)
+        ..removeAll(HttpHeaders.etagHeader)
+        ..removeAll('content-md5')
+        ..contentLength = responseBytes.length;
+      patchedHeaders = updated;
+      _mocked = true;
+    } on FormatException {
+      patchedHeaders = null;
+    }
+    if (_mocked) await _wait(rule.delayMs);
+    _traffic?.finish(
+      mocked: _mocked,
+      statusCode: response.statusCode,
+      contentType: response.headers.value(HttpHeaders.contentTypeHeader),
+      body: _RecordingHttpClientResponse._describeBody(
+        response.headers.contentType,
+        responseBytes,
+      ),
+    );
+    return _RecordingHttpClientResponse.buffered(
+      response,
+      responseBytes,
+      patchedHeaders,
+    );
   }
 
   @override
   void abort([Object? exception, StackTrace? stackTrace]) {
     if (_done.isCompleted) return;
     _timer?.cancel();
+    if (_delay?.isCompleted == false) _delay!.complete();
+    _realRequest?.abort(exception, stackTrace);
     _onFinish(this);
     _traffic?.fail(
       exception ?? const HttpException('Request has been aborted'),
-      mocked: true,
+      mocked: _mocked,
     );
     _done.completeError(
       exception ?? HttpException('Request has been aborted', uri: uri),
@@ -277,18 +397,21 @@ final class _MockRequest implements HttpClientRequest {
   }
 
   @override
-  void add(List<int> data) => _traffic?.collectRequestBytes(data);
+  void add(List<int> data) {
+    if (_started || _done.isCompleted) throw StateError('Request is closed');
+    _body.add(data);
+    _traffic?.collectRequestBytes(data);
+  }
+
   @override
-  void write(Object? object) => _traffic?.collectRequestText('$object');
+  void write(Object? object) => add(encoding.encode('$object'));
   @override
   void writeAll(Iterable<dynamic> objects, [String separator = '']) =>
-      _traffic?.collectRequestText(objects.join(separator));
+      write(objects.join(separator));
   @override
-  void writeln([Object? object = '']) =>
-      _traffic?.collectRequestText('$object\n');
+  void writeln([Object? object = '']) => write('$object\n');
   @override
-  void writeCharCode(int charCode) =>
-      _traffic?.collectRequestText(String.fromCharCode(charCode));
+  void writeCharCode(int charCode) => write(String.fromCharCode(charCode));
   @override
   void addError(Object error, [StackTrace? stackTrace]) =>
       abort(error, stackTrace);
@@ -625,9 +748,17 @@ final class _RecordingHttpClientRequest implements HttpClientRequest {
 final class _RecordingHttpClientResponse extends StreamView<List<int>>
     implements HttpClientResponse {
   _RecordingHttpClientResponse(this._inner, TrafficRecording traffic)
-    : super(_tee(_inner, traffic));
+    : _patchedHeaders = null,
+      super(_tee(_inner, traffic));
+
+  _RecordingHttpClientResponse.buffered(
+    this._inner,
+    List<int> bytes,
+    this._patchedHeaders,
+  ) : super(Stream<List<int>>.fromIterable([if (bytes.isNotEmpty) bytes]));
 
   final HttpClientResponse _inner;
+  final HttpHeaders? _patchedHeaders;
 
   /// Content types worth keeping as text; anything else becomes a size
   /// placeholder so binary payloads never reach the capture view.
@@ -705,9 +836,10 @@ final class _RecordingHttpClientResponse extends StreamView<List<int>>
   @override
   String get reasonPhrase => _inner.reasonPhrase;
   @override
-  HttpHeaders get headers => _inner.headers;
+  HttpHeaders get headers => _patchedHeaders ?? _inner.headers;
   @override
-  int get contentLength => _inner.contentLength;
+  int get contentLength =>
+      _patchedHeaders?.contentLength ?? _inner.contentLength;
   @override
   bool get persistentConnection => _inner.persistentConnection;
   @override
@@ -722,7 +854,9 @@ final class _RecordingHttpClientResponse extends StreamView<List<int>>
   List<Cookie> get cookies => _inner.cookies;
   @override
   HttpClientResponseCompressionState get compressionState =>
-      _inner.compressionState;
+      _patchedHeaders == null
+      ? _inner.compressionState
+      : HttpClientResponseCompressionState.notCompressed;
   @override
   Future<HttpClientResponse> redirect([
     String? method,

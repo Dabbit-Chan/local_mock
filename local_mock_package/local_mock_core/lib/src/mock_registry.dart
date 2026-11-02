@@ -14,9 +14,12 @@ final class MockRegistry {
 
   void clear() => replace(<dynamic>[]);
 
-  MockRule? match(String method, Uri uri) {
+  Iterable<MockRule> candidates(String method, Uri uri) =>
+      _rules.where((rule) => rule.matchesEndpoint(method, uri));
+
+  MockRule? match(String method, Uri uri, {dynamic requestBody}) {
     for (final rule in _rules) {
-      if (rule.matches(method, uri)) return rule;
+      if (rule.matches(method, uri, requestBody: requestBody)) return rule;
     }
     return null;
   }

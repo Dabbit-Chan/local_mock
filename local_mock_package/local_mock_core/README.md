@@ -23,13 +23,24 @@ local_mock 的核心包，与具体 HTTP 客户端无关。负责：
 | `delayMs` | int | 否 | `0` | 响应延迟毫秒数，范围 0..60000 |
 | `headers` | object | 否 | `{}` | 响应头，值必须为字符串 |
 | `body` | any | 否 | `null` | 任意 JSON 值，作为响应体 |
+| `params` | object | 否 | `{}` | 参数子集精确匹配，值为字符串 / 数字 / 布尔值 / null，解析后统一转为字符串 |
+| `patchBody` | object | 否 | `{}` | 字段路径到新 JSON 值的映射；非空时修改真实响应，而非整包替换 |
 
 匹配规则：
 
-- 按顺序查找，第一条 `enabled` 且 `method`、`path`、`host`（如有）都匹配的规则生效。
-- 查询参数不参与匹配。
+- 按顺序查找，第一条 `enabled` 且 `method`、`path`、`host`（如有）、`params`（如有）都匹配的规则生效；规则不会叠加。
+- `params` 留空时继续忽略参数。填写时逐项匹配，额外参数不影响结果；同名参数以 URL query 为准，没有时才查请求体。重复 query 中有一个值相等即可。
+- 请求体支持 JSON 对象、JSON 字符串和 URL 编码表单；Dio 适配器另外支持 `FormData` 普通字段。请求体可用 `filter.id`、`items[0].id` 定位嵌套值；不支持对整个对象 / 数组进行参数比较。缺失的键不会匹配 `null`。
 - 默认响应头为 `content-type: application/json; charset=utf-8`，可被 `headers` 覆盖；响应头名统一转小写。
 - 整个规则列表先完整校验再替换，任一规则不合法时保留原有规则不变。
+
+响应补丁：
+
+- `patchBody: {"data.product": {...}}` 会先访问真实后端，再替换指定字段；对象 / 数组字段是整体替换，不递归合并。
+- 支持点分隔路径和非负数组下标，例如 `data.items[0].name`、`data.items.0.name`；可设置 `null`、新增已有对象的叶子字段，但不创建缺失的父级，不扩展数组。不支持名称本身带点或方括号的字段。
+- 补丁在深拷贝上执行；任何路径父级不存在、类型不符或数组越界时，适配器保留整个原始响应。非 JSON 响应同样透传，不伪造成功或吞掉网络错误。
+- 真实 HTTP 状态码和业务响应头保留，规则的 `body` / `statusCode` / `headers` 被忽略；适配器会移除失效的长度 / 校验头，HttpClient 重新计算字节长度。`delayMs` 是读取真实响应后的额外延迟。
+- 可以同时设置 `params` 与 `patchBody`，只补丁指定参数对应的响应。示例见[根 README](../../README.md#只修改真实响应中的字段)。
 
 ## 连接服务端
 
@@ -56,7 +67,7 @@ import 'package:local_mock_core/local_mock_core.dart';
 LocalMock.ensureInitialized();
 
 // 查找匹配规则；禁用模式始终返回 null。
-final MockRule? rule = LocalMock.match('GET', uri);
+final MockRule? rule = LocalMock.match('GET', uri, requestBody: requestData);
 if (rule != null) {
   rule.statusCode;       // 状态码
   rule.delayMs;          // 延迟
@@ -84,8 +95,9 @@ LocalMock.debugClearTraffic();
 ## 编写自定义适配器
 
 1. 在适配器初始化时调用 `LocalMock.ensureInitialized()`。
-2. 每个请求发出前调用 `LocalMock.beginTraffic(method, uri)` 开始记录，并调用 `LocalMock.match(method, uri)` 查找规则。
-3. 命中时按 `statusCode` / `delayMs` / `responseHeaders` / `bodyCopy` 构造响应，并用 `TrafficRecording.finish(mocked: true, ...)` 记录；否则走原始网络请求，结束时 `finish` / `fail` 记录真实结果。
+2. 每个请求发出前调用 `LocalMock.beginTraffic(method, uri)` 开始记录，并调用 `LocalMock.match(method, uri, requestBody: data)` 查找规则。若请求体尚未写入，可先取 `LocalMock.candidates(method, uri)`，体收集完成后按原顺序调用 `rule.matches(..., requestBody: data)`。
+3. 非补丁命中时按 `statusCode` / `delayMs` / `responseHeaders` / `bodyCopy` 构造响应；`rule.isPatch` 为真时走真实网络，再用 `rule.applyPatch(decodedBody)` 修改深拷贝，捕获 `FormatException` 后透传原响应。
+4. 用 `TrafficRecording.finish(mocked: true, ...)` 记录实际返回的 Mock / 补丁响应；其他请求结束时 `finish` / `fail` 记录真实结果。
 
 ## 规则生命周期
 

@@ -541,7 +541,16 @@ class RuleCard extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final enabled = rule['enabled'] == true;
-    final bodyText = rule['body'] == null ? 'null' : jsonEncode(rule['body']);
+    final patchBody = rule['patchBody'] as Map<String, dynamic>? ?? const {};
+    final params = rule['params'] as Map<String, dynamic>? ?? const {};
+    final isPatch = patchBody.isNotEmpty;
+    final bodyText = [
+      if (params.isNotEmpty) '参数匹配: ${jsonEncode(params)}',
+      if (isPatch)
+        '字段补丁: ${jsonEncode(patchBody)}'
+      else
+        rule['body'] == null ? 'null' : jsonEncode(rule['body']),
+    ].join('\n');
     final headers = (rule['headers'] as Map<String, dynamic>? ?? const {});
 
     return Card(
@@ -610,10 +619,12 @@ class RuleCard extends StatelessWidget {
                 spacing: 6,
                 runSpacing: 4,
                 children: [
-                  _MetaChip(label: '${rule['statusCode']}'),
+                  _MetaChip(label: isPatch ? '字段补丁' : '${rule['statusCode']}'),
+                  if (params.isNotEmpty)
+                    _MetaChip(label: '${params.length} 个参数条件'),
                   if (rule['delayMs'] != 0)
                     _MetaChip(label: '${rule['delayMs']}ms'),
-                  if (headers.isNotEmpty)
+                  if (!isPatch && headers.isNotEmpty)
                     _MetaChip(label: '${headers.length} headers'),
                 ],
               ),

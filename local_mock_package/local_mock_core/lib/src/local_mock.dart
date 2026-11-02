@@ -109,8 +109,15 @@ abstract final class LocalMock {
 
   /// First enabled rule matching [method] and [uri], or null.
   /// Always null when disabled.
-  static MockRule? match(String method, Uri uri) =>
-      enabled && !_isControlRequest(uri) ? _registry.match(method, uri) : null;
+  static MockRule? match(String method, Uri uri, {dynamic requestBody}) =>
+      enabled && !_isControlRequest(uri)
+      ? _registry.match(method, uri, requestBody: requestBody)
+      : null;
+
+  static List<MockRule> candidates(String method, Uri uri) =>
+      enabled && !_isControlRequest(uri)
+      ? List.unmodifiable(_registry.candidates(method, uri))
+      : const [];
 
   /// Starts recording one request for the capture view. Returns null outside
   /// enabled modes. Call [TrafficRecording.finish] or [TrafficRecording.fail] once it settles.

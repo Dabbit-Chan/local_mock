@@ -33,6 +33,17 @@ def _number(rule, key, low, high):
         raise ValueError(f"{key} must be an integer in {low}..{high}")
 
 
+def _field_path(path):
+    if not re.fullmatch(
+        r"(?:[^.\[\]]+|\[(?:0|[1-9][0-9]*)\])(?:\[(?:0|[1-9][0-9]*)\]|\.[^.\[\]]+)*",
+        path,
+    ):
+        raise ValueError(f"invalid field path: {path}")
+    normalized = re.sub(r"\[(0|[1-9][0-9]*)\]", r".\1", path).lstrip(".")
+    if any(not segment.strip() for segment in normalized.split(".")):
+        raise ValueError(f"invalid field path: {path}")
+
+
 def validate_rule(rule):
     if not isinstance(rule, dict):
         raise ValueError("each rule must be an object")
@@ -56,6 +67,24 @@ def validate_rule(rule):
         not isinstance(v, str) for v in headers.values()
     ):
         raise ValueError("headers must be an object with string values")
+    params = rule.get("params")
+    if params is None:
+        params = {}
+    if not isinstance(params, dict) or any(
+        not key.strip()
+        or (value is not None and not isinstance(value, (str, int, float, bool)))
+        for key, value in params.items()
+    ):
+        raise ValueError(
+            "params must be an object with non-empty keys and primitive values"
+        )
+    patch_body = rule.get("patchBody")
+    if patch_body is None:
+        patch_body = {}
+    if not isinstance(patch_body, dict):
+        raise ValueError("patchBody must be an object")
+    for field_path in patch_body:
+        _field_path(field_path)
     _number(rule, "statusCode", 100, 599)
     _number(rule, "delayMs", 0, 60000)
     return rule_id

@@ -40,20 +40,24 @@ description: 为 local_mock 生成 Mock 规则 JSON 对象（粘贴到 local_moc
 | `delayMs` | int | 否 | `0` | 0..60000 |
 | `headers` | object | 否 | `{}` | 值必须是字符串 |
 | `body` | 任意 JSON | 否 | `null` | 作为 JSON 响应体 |
+| `params` | object | 否 | `{}` | 参数子集匹配，值为字符串 / 数字 / 布尔值 / null，统一转字符串比较 |
+| `patchBody` | object | 否 | `{}` | 字段路径到新值的映射；非空时只修改真实 JSON 响应中的这些字段 |
 
 ## 匹配语义
 
-- 按数组顺序匹配，第一条 `enabled` 且 `method`、`path`、`host`（如设置）都相同的规则生效。
-- 查询参数不参与匹配：`/api/list?page=1` 和 `/api/list?page=2` 命中同一条规则。需要区分时只能分次下发不同规则。
+- 按数组顺序匹配，第一条 `enabled` 且 `method`、`path`、`host`（如设置）、`params`（如设置）全部匹配的规则生效，不叠加。
+- `params` 不填时忽略参数；填写 `{"id":"123"}` 可只修改一个 ID 的响应。指定键先查 URL query，再查 JSON / URL 编码表单请求体，支持嵌套请求体路径；同名 query 优先。多条件全满足、额外参数不限，缺失键不匹配 null。
+- 用 `patchBody: {"data.product": {...}}` 固定不同订单中的商品，但保留各自状态；用 `params` + `patchBody` 仅补丁指定 ID。路径支持 `data.items[0].name`，数组 / 对象的值整体替换。父级不存在、类型不符、数组越界或非 JSON 时保留整个真实响应。
+- 非空 `patchBody` 仍会访问真实后端，忽略规则中的 `body`、`statusCode`、`headers`；真实 HTTP 状态码和其他字段不变。`delayMs` 是得到真实响应后的额外延迟。补丁依赖后端可用，不能用来模拟离线成功。
 - 同一接口的多个场景可以一起输出，只把要测的那条设为 `enabled: true`，其余设为 `false`。
 - 默认响应头为 `content-type: application/json; charset=utf-8`，一般不用写 `headers`。
 - 用户粘贴到已有数组中时，新规则和已有规则一起参与匹配；排在前面的同接口规则会先命中。
 
 ## 适配器限制
 
-- `local_mock_dio`：只支持 `ResponseType.json` 的请求；非 2xx（或不满足 `validateStatus`）会像真实请求一样抛出 bad response 错误，`response.extra['local_mock_rule_id']` 可用于确认命中。
+- `local_mock_dio`：整包替换只支持 `ResponseType.json`，补丁对其他响应类型直接透传；非 2xx（或不满足 `validateStatus`）会像真实请求一样抛出 bad response 错误，`response.extra['local_mock_rule_id']` 可用于确认命中。参数匹配也支持 `FormData` 普通字段。
 - `local_mock_http`：`HEAD` 请求以及 `204` / `304` 状态码不返回响应体，这类规则的 `body` 写 `null` 即可。
-- 所有响应体都会以 JSON 编码返回，无法 mock 二进制、文件下载或非 JSON 文本。
+- 整包 Mock 响应体以 JSON 编码返回，无法 mock 二进制、文件下载或非 JSON 文本；字段补丁仅适用于 JSON，其他响应原样透传。
 
 ## 常见场景
 

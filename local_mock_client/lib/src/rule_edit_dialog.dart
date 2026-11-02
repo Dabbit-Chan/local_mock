@@ -54,8 +54,31 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
         ? ''
         : const JsonEncoder.withIndent('  ').convert(widget.initial['body']),
   );
+  late final _params = TextEditingController(
+    text: widget.initial['params'] == null
+        ? ''
+        : const JsonEncoder.withIndent('  ').convert(widget.initial['params']),
+  );
+  late final _patchBody = TextEditingController(
+    text: widget.initial['patchBody'] == null
+        ? ''
+        : const JsonEncoder.withIndent(
+            '  ',
+          ).convert(widget.initial['patchBody']),
+  );
   late String _method = (widget.initial['method'] ?? 'GET').toUpperCase();
   String? _error;
+
+  bool get _hasPatch {
+    final text = _patchBody.text.trim();
+    if (text.isEmpty) return false;
+    try {
+      final decoded = jsonDecode(text);
+      return decoded is Map && decoded.isNotEmpty;
+    } on FormatException {
+      return true;
+    }
+  }
 
   @override
   void dispose() {
@@ -66,6 +89,8 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
     _delayMs.dispose();
     _headers.dispose();
     _body.dispose();
+    _params.dispose();
+    _patchBody.dispose();
     super.dispose();
   }
 
@@ -112,6 +137,37 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
     }
   }
 
+  String? _conditionValidator(String? value, {bool params = false}) {
+    final text = value?.trim() ?? '';
+    if (text.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is! Map<String, dynamic>) return '必须是 JSON 对象';
+      if (decoded.keys.any((key) => key.trim().isEmpty)) return '字段名不能为空';
+      if (params &&
+          decoded.values.any(
+            (value) =>
+                value != null &&
+                value is! String &&
+                value is! num &&
+                value is! bool,
+          )) {
+        return '参数的值只能是字符串、数字、布尔值或 null';
+      }
+      if (!params) {
+        MockRule.fromJson({
+          'id': 'validate',
+          'method': 'GET',
+          'path': '/',
+          'patchBody': decoded,
+        });
+      }
+      return null;
+    } on FormatException catch (error) {
+      return '不是合法的 JSON 或字段路径：${error.message}';
+    }
+  }
+
   void _submit() {
     if (!_formKey.currentState!.validate()) return;
     final headersText = _headers.text.trim();
@@ -122,10 +178,20 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
       'method': _method,
       'path': _path.text.trim(),
       if (_host.text.trim().isNotEmpty) 'host': _host.text.trim(),
-      'statusCode': int.parse(_statusCode.text.trim()),
+      'statusCode': _hasPatch
+          ? widget.initial['statusCode'] ?? 200
+          : int.parse(_statusCode.text.trim()),
       'delayMs': int.parse(_delayMs.text.trim()),
-      if (headersText.isNotEmpty) 'headers': jsonDecode(headersText),
-      if (bodyText.isNotEmpty) 'body': jsonDecode(bodyText),
+      if (_hasPatch) ...{
+        'headers': widget.initial['headers'] ?? <String, dynamic>{},
+        'body': widget.initial['body'],
+      } else ...{
+        if (headersText.isNotEmpty) 'headers': jsonDecode(headersText),
+        if (bodyText.isNotEmpty) 'body': jsonDecode(bodyText),
+      },
+      if (_params.text.trim().isNotEmpty) 'params': jsonDecode(_params.text),
+      if (_patchBody.text.trim().isNotEmpty)
+        'patchBody': jsonDecode(_patchBody.text),
     };
     try {
       final normalized = MockRule.fromJson(draft).toJson();
@@ -201,15 +267,53 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
                         decoration: _decoration('Host（可选，留空匹配任意域名）'),
                       ),
                       const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _params,
+                        maxLines: 3,
+                        minLines: 2,
+                        decoration: _decoration(
+                          '参数匹配（可选）',
+                          hint: '{"id": "123"}，留空匹配所有参数',
+                        ),
+                        style: const TextStyle(fontFamily: 'monospace'),
+                        validator: (value) =>
+                            _conditionValidator(value, params: true),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        '只匹配填写的参数，其他参数不限。先查 URL query，再查 JSON / 表单请求体；多个条件需全部满足。',
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _patchBody,
+                        maxLines: 5,
+                        minLines: 2,
+                        decoration: _decoration(
+                          '字段补丁（可选）',
+                          hint: '{"data.product": {"sku": "A1"}}',
+                        ),
+                        style: const TextStyle(fontFamily: 'monospace'),
+                        validator: _conditionValidator,
+                        onChanged: (_) => setState(() {}),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _hasPatch
+                            ? '已启用字段补丁：请求真实接口，只修改指定字段；保留状态码、响应头和其他字段，整包响应体不生效。'
+                            : '填写“字段路径: 新值”即可只修改真实响应中的字段；支持 data.product 和 data.items[0].name，可与参数匹配组合使用。',
+                      ),
+                      const SizedBox(height: 12),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Expanded(
                             child: TextFormField(
                               controller: _statusCode,
+                              enabled: !_hasPatch,
                               keyboardType: TextInputType.number,
                               decoration: _decoration('状态码'),
-                              validator: (value) => _intRange(value, 100, 599),
+                              validator: (value) =>
+                                  _hasPatch ? null : _intRange(value, 100, 599),
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -226,24 +330,28 @@ class _RuleEditDialogState extends State<RuleEditDialog> {
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _headers,
+                        enabled: !_hasPatch,
                         maxLines: 3,
                         decoration: _decoration(
                           '响应头 JSON（可选）',
                           hint: '{"content-type": "text/html"}',
                         ),
                         style: const TextStyle(fontFamily: 'monospace'),
-                        validator: (value) =>
-                            _jsonValidator(value, objectOnly: true),
+                        validator: (value) => _hasPatch
+                            ? null
+                            : _jsonValidator(value, objectOnly: true),
                       ),
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _body,
+                        enabled: !_hasPatch,
                         maxLines: 8,
                         minLines: 4,
                         textAlignVertical: TextAlignVertical.top,
                         decoration: _decoration('响应体 JSON（留空视为 null）'),
                         style: const TextStyle(fontFamily: 'monospace'),
-                        validator: _jsonValidator,
+                        validator: (value) =>
+                            _hasPatch ? null : _jsonValidator(value),
                       ),
                     ],
                   ),

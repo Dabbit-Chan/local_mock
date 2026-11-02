@@ -51,6 +51,7 @@ final class LocalMockInterceptor extends Interceptor {
   /// waiting for a callback that never comes.
   static const _maxPending = 64;
   final _pendingTraffic = <RequestOptions, TrafficRecording>{};
+  final _patchRules = Expando<MockRule>();
 
   void _remember(RequestOptions options, TrafficRecording traffic) {
     while (_pendingTraffic.length >= _maxPending) {
@@ -62,16 +63,58 @@ final class LocalMockInterceptor extends Interceptor {
   TrafficRecording? _forget(RequestOptions options) =>
       _pendingTraffic.remove(options);
 
+  Future<void> _delay(MockRule rule, RequestOptions options) async {
+    final token = options.cancelToken;
+    if (token?.isCancelled == true) throw token!.cancelError!;
+    if (rule.delayMs > 0) {
+      final delay = Future<void>.delayed(Duration(milliseconds: rule.delayMs));
+      await (token == null
+          ? delay
+          : Future.any<void>([delay, token.whenCancel.then<void>((_) {})]));
+    }
+    if (token?.isCancelled == true) throw token!.cancelError!;
+  }
+
+  Future<bool> _patchResponse(Response<dynamic> response) async {
+    final options = response.requestOptions;
+    final rule = _patchRules[options];
+    _patchRules[options] = null;
+    if (rule == null || options.responseType != ResponseType.json) return false;
+    dynamic patched;
+    try {
+      patched = rule.applyPatch(response.data);
+    } on FormatException {
+      return false;
+    } on JsonUnsupportedObjectError {
+      return false;
+    }
+    await _delay(rule, options);
+    response.data = patched;
+    for (final name in ['content-length', 'etag', 'content-md5']) {
+      response.headers.map.remove(name);
+    }
+    response.extra.addAll({'local_mock': true, 'local_mock_rule_id': rule.id});
+    return true;
+  }
+
   @override
   void onRequest(
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
     final traffic = LocalMock.beginTraffic(options.method, options.uri);
-    final rule = LocalMock.match(options.method, options.uri);
-    if (rule == null) {
+    traffic?.requestBody = _describeBody(options.data);
+    final data = options.data;
+    final rule = LocalMock.match(
+      options.method,
+      options.uri,
+      requestBody: data is FormData
+          ? Map<String, String>.fromEntries(data.fields)
+          : data,
+    );
+    if (rule == null || rule.isPatch) {
+      if (rule != null) _patchRules[options] = rule;
       if (traffic != null) {
-        traffic.requestBody = _describeBody(options.data);
         _remember(options, traffic);
       }
       handler.next(options);
@@ -84,17 +127,7 @@ final class LocalMockInterceptor extends Interceptor {
           error: 'local_mock_dio only supports ResponseType.json',
         );
       }
-      final token = options.cancelToken;
-      if (token?.isCancelled == true) throw token!.cancelError!;
-      if (rule.delayMs > 0) {
-        final delay = Future<void>.delayed(
-          Duration(milliseconds: rule.delayMs),
-        );
-        await (token == null
-            ? delay
-            : Future.any<void>([delay, token.whenCancel.then<void>((_) {})]));
-      }
-      if (token?.isCancelled == true) throw token!.cancelError!;
+      await _delay(rule, options);
       final response = Response<dynamic>(
         requestOptions: options,
         statusCode: rule.statusCode,
@@ -149,33 +182,56 @@ final class LocalMockInterceptor extends Interceptor {
   void onResponse(
     Response<dynamic> response,
     ResponseInterceptorHandler handler,
-  ) {
-    _forget(response.requestOptions)?.finish(
-      statusCode: response.statusCode,
-      contentType: response.headers.value(Headers.contentTypeHeader),
-      body: _describeBody(response.data),
-    );
-    handler.next(response);
+  ) async {
+    final traffic = _forget(response.requestOptions);
+    try {
+      final patched = await _patchResponse(response);
+      traffic?.finish(
+        mocked: patched,
+        statusCode: response.statusCode,
+        contentType: response.headers.value(Headers.contentTypeHeader),
+        body: patched
+            ? jsonEncode(response.data)
+            : _describeBody(response.data),
+      );
+      handler.next(response);
+    } catch (error) {
+      traffic?.fail(error, mocked: true);
+      handler.reject(
+        error is DioError
+            ? error
+            : DioError(requestOptions: response.requestOptions, error: error),
+        true,
+      );
+    }
   }
 
   @override
-  void onError(DioError err, ErrorInterceptorHandler handler) {
+  void onError(DioError err, ErrorInterceptorHandler handler) async {
     final traffic = _forget(err.requestOptions);
     final response = err.response;
-    if (traffic != null) {
+    try {
       if (response != null) {
-        traffic.finish(
+        final patched = await _patchResponse(response);
+        traffic?.finish(
+          mocked: patched,
           statusCode: response.statusCode,
           contentType: response.headers.value(Headers.contentTypeHeader),
-          body: _describeBody(response.data),
+          body: patched
+              ? jsonEncode(response.data)
+              : _describeBody(response.data),
         );
       } else {
-        traffic.fail(
+        _patchRules[err.requestOptions] = null;
+        traffic?.fail(
           '${err.type.name}: ${err.message ?? err.error ?? 'failed'}',
         );
       }
+      handler.next(err);
+    } catch (error) {
+      traffic?.fail(error, mocked: true);
+      handler.next(error is DioError ? error : err);
     }
-    handler.next(err);
   }
 }
 

@@ -43,12 +43,14 @@ LocalMockDio.attach(dio);                // 再挂 local_mock
 
 ## 响应行为
 
-- 命中规则时不发起网络请求，直接返回 `Response`，`data` 为规则 `body` 的深拷贝。
+- 命中普通规则时不发起网络请求，直接返回 `Response`，`data` 为规则 `body` 的深拷贝。
+- `params` 支持 URL query、JSON / URL 编码表单请求体及 `FormData` 普通字段；只有指定参数全部匹配才生效，其余请求仍走原传输层。
+- 非空 `patchBody` 会先发起真实请求，再只修改 JSON 响应的指定字段，保留真实状态码和其他字段；网络错误不会变成 Mock 成功，HTTP 错误的 JSON 响应也可补丁。路径、失败兜底和组合示例见[核心规则说明](../local_mock_core/README.md#规则字段)。
 - `response.extra` 中带有 `local_mock: true` 和 `local_mock_rule_id`，便于日志区分。
 - 响应会继续经过后续拦截器的 `onResponse` / `onError`（例如业务反序列化、统一错误处理）。
 - `validateStatus` 不通过时，与真实请求一样抛出 bad response 类型的 `DioError` / `DioException`；`receiveDataWhenStatusError` 为 `false` 时 `data` 为 `null`。
 - `delayMs` 期间支持 `CancelToken` 取消。
-- 只支持 `ResponseType.json`，其他类型命中规则时会返回错误。
+- 整包 Mock 只支持 `ResponseType.json`，其他类型命中时会返回错误；字段补丁仅作用于 JSON，其他响应类型不修改。
 
 ## 抓包
 
