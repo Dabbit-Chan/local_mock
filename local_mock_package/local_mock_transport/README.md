@@ -2,6 +2,17 @@
 
 App、Relay 和 Web 控制台之间的 WebSocket 通信，不依赖 Flutter。业务 App 不直接使用本包，它由 `local_mock_core` 引入；Relay 的实现在 `local_mock_client/tool/relay_host.dart`。
 
+## 安装
+
+如需独立使用通信协议，在 `pubspec.yaml` 中添加：
+
+```yaml
+dependencies:
+  local_mock_transport: ^1.0.0
+```
+
+然后运行 `flutter pub get`。
+
 ## 内容
 
 - `relayUri(address, role)`：把服务地址转换为 WebSocket 入口。`http` → `ws`，`https` → `wss`；保留端口和路径前缀，末尾已有的 `/ws/app` 或 `/ws/console` 会被替换。例如 `https://host/prefix` 的 App 入口是 `wss://host/prefix/ws/app`。

@@ -10,25 +10,14 @@ Debug / Profile 构建中生效；Release 构建和 Web 平台上不做任何事
 
 ## 安装
 
-`local_mock_core` 和 `local_mock_transport` 没有发布到 pub.dev，需要用 `dependency_overrides` 一起指定来源：
+在 `pubspec.yaml` 中添加依赖，然后运行 `flutter pub get`：
 
 ```yaml
 dependencies:
-  local_mock_http:
-    git:
-      url: https://github.com/Dabbit-Chan/local_mock.git
-      path: local_mock_package/local_mock_http
-
-dependency_overrides:
-  local_mock_core:
-    git:
-      url: https://github.com/Dabbit-Chan/local_mock.git
-      path: local_mock_package/local_mock_core
-  local_mock_transport:
-    git:
-      url: https://github.com/Dabbit-Chan/local_mock.git
-      path: local_mock_package/local_mock_transport
+  local_mock_http: ^1.0.0
 ```
+
+`local_mock_core` 和 `local_mock_transport` 会自动作为依赖引入。
 
 ## 接入
 

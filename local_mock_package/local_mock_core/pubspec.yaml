@@ -1,13 +1,13 @@
 name: local_mock_core
 description: App-side mock rules and traffic capture with outbound WebSocket reporting.
-version: 0.3.0
+version: 1.0.0
 
 environment:
   sdk: '>=3.8.0 <4.0.0'
   flutter: '>=3.32.0'
 
 dependencies:
-  local_mock_transport: ^0.3.0
+  local_mock_transport: ^1.0.0
   flutter:
     sdk: flutter
 

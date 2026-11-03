@@ -4,26 +4,15 @@ local_mock 的 Dio 适配器。同一份代码支持 Dio 4.x（≥ 4.0.6）和 5
 
 ## 安装
 
-`local_mock_core` 和 `local_mock_transport` 没有发布到 pub.dev，需要用 `dependency_overrides` 一起指定来源（git 或本地 `path`）：
+在 `pubspec.yaml` 中添加依赖，然后运行 `flutter pub get`：
 
 ```yaml
 dependencies:
   dio: ^5.0.0
-  local_mock_dio:
-    git:
-      url: https://github.com/Dabbit-Chan/local_mock.git
-      path: local_mock_package/local_mock_dio
-
-dependency_overrides:
-  local_mock_core:
-    git:
-      url: https://github.com/Dabbit-Chan/local_mock.git
-      path: local_mock_package/local_mock_core
-  local_mock_transport:
-    git:
-      url: https://github.com/Dabbit-Chan/local_mock.git
-      path: local_mock_package/local_mock_transport
+  local_mock_dio: ^1.0.0
 ```
+
+`local_mock_core` 和 `local_mock_transport` 会自动作为依赖引入。
 
 ## 接入
 

@@ -1,6 +1,6 @@
 name: local_mock_http
 description: dart:io HttpClient mock rules and capture for Debug and Profile apps.
-version: 0.3.0
+version: 1.0.0
 
 environment:
   sdk: '>=3.8.0 <4.0.0'
@@ -9,7 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  local_mock_core: ^0.3.0
+  local_mock_core: ^1.0.0
 
 dev_dependencies:
   flutter_test:

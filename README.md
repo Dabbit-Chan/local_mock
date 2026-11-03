@@ -51,10 +51,20 @@ cloudflared tunnel --url http://127.0.0.1:9090
 
 ### 3. 在 App 中接入
 
-按所用的 HTTP 客户端选择适配器（安装方式见各自 README）：
+按所用的 HTTP 客户端选择适配器：
 
 - Dio 4.x / 5.x → [`local_mock_dio`](local_mock_package/local_mock_dio/README.md)
 - `HttpClient` / `package:http` → [`local_mock_http`](local_mock_package/local_mock_http/README.md)
+
+在 App 的 `pubspec.yaml` 中添加所选适配器，然后运行 `flutter pub get`。例如使用 Dio：
+
+```yaml
+dependencies:
+  dio: ^5.0.0
+  local_mock_dio: ^1.0.0
+```
+
+使用 `HttpClient` / `package:http` 时，添加 `local_mock_http: ^1.0.0`。`local_mock_core` 和 `local_mock_transport` 会自动作为依赖引入。
 
 ```dart
 import 'package:local_mock_dio/local_mock_dio.dart';

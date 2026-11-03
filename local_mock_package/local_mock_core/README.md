@@ -9,6 +9,17 @@
 
 业务 App 一般不直接依赖本包，而是使用 [`local_mock_dio`](../local_mock_dio/README.md) 或 [`local_mock_http`](../local_mock_http/README.md)，它们会重新导出这里的 API。
 
+## 安装
+
+如需直接使用核心 API，在 `pubspec.yaml` 中添加：
+
+```yaml
+dependencies:
+  local_mock_core: ^1.0.0
+```
+
+然后运行 `flutter pub get`。
+
 ## 启用条件
 
 `LocalMock.enabled == !kReleaseMode`：Debug 和 Profile 构建中启用，Release 构建中所有入口都是空操作（`connect` 返回 `false`，`match` 返回 `null`，不记录请求）。
