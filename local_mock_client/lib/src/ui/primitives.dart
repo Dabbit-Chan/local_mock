@@ -19,6 +19,47 @@ class Hairline extends StatelessWidget {
   }
 }
 
+/// The Local Mock mark on a 24-unit grid: an ink "L" frame missing its
+/// corner, with the signal block standing in for it – the mock that answers
+/// in place of the real server. Mirrors `web/favicon.svg`.
+class BrandMark extends StatelessWidget {
+  const BrandMark({super.key, this.size = 18});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return CustomPaint(
+      size: Size.square(size),
+      painter: _BrandMarkPainter(ink: p.ink, signal: p.signal),
+    );
+  }
+}
+
+class _BrandMarkPainter extends CustomPainter {
+  const _BrandMarkPainter({required this.ink, required this.signal});
+
+  final Color ink;
+  final Color signal;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final u = size.shortestSide / 24;
+    Rect r(double x, double y, double w, double h) =>
+        Rect.fromLTWH(x * u, y * u, w * u, h * u);
+    final inkPaint = Paint()..color = ink;
+    canvas
+      ..drawRect(r(0, 0, 7, 24), inkPaint)
+      ..drawRect(r(0, 17, 24, 7), inkPaint)
+      ..drawRect(r(11, 0, 13, 13), Paint()..color = signal);
+  }
+
+  @override
+  bool shouldRepaint(_BrandMarkPainter old) =>
+      old.ink != ink || old.signal != signal;
+}
+
 /// Small uppercase label used above fields and as list captions.
 class Eyebrow extends StatelessWidget {
   const Eyebrow(this.text, {super.key, this.color});

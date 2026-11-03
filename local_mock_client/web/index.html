@@ -14,17 +14,114 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Local Mock">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="manifest" href="manifest.json">
 
   <title>Local Mock</title>
-  <!-- Paint the page colour before Flutter starts so dark mode does not flash white. -->
+  <!--
+    Paint the page colour before Flutter starts so dark mode does not flash
+    white, and show a boot screen until Flutter renders its first frame.
+    Tokens mirror lib/src/ui/theme.dart (Palette.light / Palette.dark).
+  -->
   <style>
-    html, body { margin: 0; background: #FFFFFF; }
-    @media (prefers-color-scheme: dark) { html, body { background: #111111; } }
+    :root {
+      --paper: #FFFFFF; --ink: #111111; --muted: #6B6B66;
+      --faint: #A8A8A2; --rule: #DDDDD8; --signal: #E2231A;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #111111; --ink: #F0F0EC; --muted: #9A9A94;
+        --faint: #5E5E5A; --rule: #2B2B29; --signal: #FF4B32;
+      }
+    }
+    html, body { margin: 0; background: var(--paper); }
+
+    #boot {
+      position: fixed; inset: 0; z-index: 2147483647;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--paper); color: var(--ink);
+      font-family: Inter, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      transition: opacity 240ms ease-out;
+    }
+    #boot.done { opacity: 0; pointer-events: none; }
+
+    .boot-card { width: 240px; }
+
+    /* The mark on a 24-unit grid: ink "L" frame + signal block. */
+    .boot-mark { position: relative; width: 48px; height: 48px; }
+    .boot-mark i { position: absolute; display: block; }
+    .boot-mark .v { left: 0; top: 0; width: 14px; height: 48px; background: var(--ink);
+      transform-origin: bottom; animation: boot-grow-y 420ms cubic-bezier(.2,.7,.2,1) both; }
+    .boot-mark .h { left: 0; bottom: 0; width: 48px; height: 14px; background: var(--ink);
+      transform-origin: left; animation: boot-grow-x 420ms 180ms cubic-bezier(.2,.7,.2,1) both; }
+    .boot-mark .s { right: 0; top: 0; width: 26px; height: 26px; background: var(--signal);
+      animation: boot-drop 360ms 520ms cubic-bezier(.2,.7,.2,1) both,
+                 boot-live 1400ms 1200ms steps(1, end) infinite; }
+
+    .boot-title {
+      margin-top: 24px; font-size: 18px; font-weight: 700; letter-spacing: -0.3px;
+      animation: boot-fade 300ms 700ms both;
+    }
+    .boot-caption {
+      display: flex; justify-content: space-between; margin-top: 4px;
+      font: 12px/1.45 "JetBrains Mono", "SF Mono", Menlo, Consolas, "PingFang SC", monospace;
+      color: var(--muted); animation: boot-fade 300ms 800ms both;
+    }
+    .boot-caption b { font-weight: 400; color: var(--signal); }
+
+    /* Indeterminate hairline progress. */
+    .boot-track {
+      position: relative; overflow: hidden; height: 2px; margin-top: 16px;
+      background: var(--rule); animation: boot-fade 300ms 800ms both;
+    }
+    .boot-track::after {
+      content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 30%;
+      background: var(--ink); animation: boot-scan 1200ms cubic-bezier(.6,0,.4,1) infinite;
+    }
+
+    @keyframes boot-grow-y { from { transform: scaleY(0); } }
+    @keyframes boot-grow-x { from { transform: scaleX(0); } }
+    @keyframes boot-drop { from { transform: translate(-6px, -6px); opacity: 0; } }
+    @keyframes boot-fade { from { opacity: 0; } }
+    @keyframes boot-live { 50% { opacity: 0.25; } }
+    @keyframes boot-scan { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+
+    @media (prefers-reduced-motion: reduce) {
+      #boot *, #boot *::after { animation: none !important; }
+      .boot-track::after { width: 100%; opacity: 0.35; }
+    }
   </style>
 </head>
 <body>
+  <div id="boot" role="status" aria-live="polite" aria-label="Local Mock 正在加载">
+    <div class="boot-card">
+      <div class="boot-mark" aria-hidden="true"><i class="v"></i><i class="h"></i><i class="s"></i></div>
+      <div class="boot-title">Local Mock</div>
+      <div class="boot-caption"><span>正在加载控制台</span><b id="boot-elapsed">0.0s</b></div>
+      <div class="boot-track" aria-hidden="true"></div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var boot = document.getElementById('boot');
+      var elapsed = document.getElementById('boot-elapsed');
+      var start = Date.now();
+      var timer = setInterval(function () {
+        elapsed.textContent = ((Date.now() - start) / 1000).toFixed(1) + 's';
+      }, 100);
+      function dismiss() {
+        if (!boot) return;
+        clearInterval(timer);
+        var el = boot;
+        boot = null;
+        el.classList.add('done');
+        setTimeout(function () { el.remove(); }, 300);
+      }
+      // Fired by the Flutter engine once the first frame is on screen.
+      window.addEventListener('flutter-first-frame', dismiss, { once: true });
+    })();
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

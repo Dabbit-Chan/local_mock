@@ -282,14 +282,13 @@ class _Brand extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final p = context.palette;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: onTap,
         child: Row(
           children: [
-            Container(width: 14, height: 14, color: p.signal),
+            const BrandMark(),
             const SizedBox(width: 10),
             Text(
               'Local Mock',

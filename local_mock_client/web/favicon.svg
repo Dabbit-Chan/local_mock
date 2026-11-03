@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <style>
+    .ink { fill: #111111; } .signal { fill: #E2231A; }
+    @media (prefers-color-scheme: dark) { .ink { fill: #F0F0EC; } .signal { fill: #FF4B32; } }
+  </style>
+  <!-- Local Mock mark: an ink "L" frame missing its corner; the red block stands in for it. -->
+  <rect class="ink" x="0" y="0" width="7" height="24"/>
+  <rect class="ink" x="0" y="17" width="24" height="7"/>
+  <rect class="signal" x="11" y="0" width="13" height="13"/>
+</svg>
