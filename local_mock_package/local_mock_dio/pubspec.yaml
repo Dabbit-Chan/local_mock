@@ -10,7 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   dio: '>=4.0.6 <6.0.0'
-  local_mock_core: ^1.0.0
+  local_mock_core: 1.0.0
 
 dev_dependencies:
   flutter_test:

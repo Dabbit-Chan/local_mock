@@ -4,4 +4,4 @@ version: 1.0.0
 environment:
   sdk: '>=3.8.0 <4.0.0'
 dependencies:
-  web_socket_channel: ^3.0.3
+  web_socket_channel: 3.0.3
