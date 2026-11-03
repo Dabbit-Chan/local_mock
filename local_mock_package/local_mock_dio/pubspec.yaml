@@ -1,6 +1,7 @@
 name: local_mock_dio
 description: Dio 4.x / 5.x mock rules and traffic capture for Debug and Profile apps.
 version: 1.0.0
+homepage: https://github.com/Dabbit-Chan/local_mock
 
 environment:
   sdk: '>=3.8.0 <4.0.0'
