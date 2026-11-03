@@ -372,8 +372,11 @@ class _RuleEditorState extends State<RuleEditor> {
     final delay = _int('delay', _delay.text, 0, 60000, '延迟');
     final patching = _mode == ResponseMode.patch;
 
+    // Recorded interfaces match by their recorded query / body instead.
     Map<String, Object?>? params;
-    final rawParams = _object('params', _params.text, '参数条件');
+    final rawParams = _hasRecordedRequest
+        ? null
+        : _object('params', _params.text, '参数条件');
     if (rawParams != null) {
       if (rawParams.keys.any((k) => k.trim().isEmpty)) {
         _errors['params'] = '参数名不能为空';
@@ -757,32 +760,35 @@ class _RuleEditorState extends State<RuleEditor> {
                               ),
                             ),
                           ]),
-                          const SizedBox(height: Space.l),
-                          _code(
-                            RuleEditorKeys.params,
-                            'params',
-                            '参数条件（可选）',
-                            _params,
-                            128,
-                            onExpand: _showParams ? null : _expandParams,
-                            onRemove: _removeParams,
-                            validator: validateJsonObject,
-                            hint: '{"id": "123"}',
-                            help:
-                                '只在这些参数全部相等时命中，其他参数不限。'
-                                '先查 URL query，再查 JSON 或表单请求体；'
-                                '嵌套字段可直接写嵌套 JSON，也可写成路径 "filter.id"、'
-                                '"modules[0]"，保存时统一展开为路径。'
-                                '数组按下标逐个比较，请求里多出的元素不影响命中。'
-                                '留空则不看参数。',
-                          ),
-                          if (_showParams && _candidates.isNotEmpty) ...[
-                            const SizedBox(height: Space.m),
-                            _ParamPicker(
-                              candidates: _candidates,
-                              selected: _flatParams()?.keys.toSet() ?? const {},
-                              onToggle: _toggleParam,
+                          if (!_hasRecordedRequest) ...[
+                            const SizedBox(height: Space.l),
+                            _code(
+                              RuleEditorKeys.params,
+                              'params',
+                              '参数条件（可选）',
+                              _params,
+                              128,
+                              onExpand: _showParams ? null : _expandParams,
+                              onRemove: _removeParams,
+                              validator: validateJsonObject,
+                              hint: '{"id": "123"}',
+                              help:
+                                  '只在这些参数全部相等时命中，其他参数不限。'
+                                  '先查 URL query，再查 JSON 或表单请求体；'
+                                  '嵌套字段可直接写嵌套 JSON，也可写成路径 "filter.id"、'
+                                  '"modules[0]"，保存时统一展开为路径。'
+                                  '数组按下标逐个比较，请求里多出的元素不影响命中。'
+                                  '留空则不看参数。',
                             ),
+                            if (_showParams && _candidates.isNotEmpty) ...[
+                              const SizedBox(height: Space.m),
+                              _ParamPicker(
+                                candidates: _candidates,
+                                selected:
+                                    _flatParams()?.keys.toSet() ?? const {},
+                                onToggle: _toggleParam,
+                              ),
+                            ],
                           ],
                           if (_hasRecordedRequest) ...[
                             const SizedBox(height: Space.l),
