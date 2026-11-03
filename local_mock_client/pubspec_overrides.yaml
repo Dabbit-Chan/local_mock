@@ -1,4 +1,5 @@
 dependency_overrides:
+  isolate_manager: 6.3.2
   local_mock_core:
     path: ../local_mock_package/local_mock_core
   local_mock_transport:
