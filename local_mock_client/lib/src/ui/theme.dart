@@ -97,7 +97,9 @@ const sansFamily = 'Inter';
 const monoFamily = 'JetBrainsMono';
 
 /// Fallbacks for CJK glyphs and for platforms where the bundled fonts are
-/// unavailable (unit tests).
+/// unavailable (unit tests). On the web these names are ignored: CJK glyphs
+/// come from the engine's Noto download (`fontFallbackBaseUrl` in
+/// web/flutter_bootstrap.js).
 const _sansFallback = [
   'PingFang SC',
   'Hiragino Sans GB',
