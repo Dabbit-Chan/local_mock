@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:re_editor/re_editor.dart';
 import 'package:local_mock_client/src/panes/rule_editor.dart';
 import 'package:local_mock_client/src/panes/traffic_list.dart';
 import 'package:local_mock_client/src/ui/primitives.dart';
@@ -141,6 +142,26 @@ void main() {
     expect(connection.applied!.single['params'], {'id': '123'});
   });
 
+  testWidgets('nested params are flattened into field paths on save', (
+    tester,
+  ) async {
+    final connection = await openDevice(tester, rules: [_profile]);
+    await tapText(tester, '/api/profile');
+    await tapKey(tester, const Key('expand-params'));
+    await setCode(
+      tester,
+      RuleEditorKeys.params,
+      '{"modules": [1, 2], "filter": {"city": "杭州"}, "page": 1}',
+    );
+    await tapKey(tester, RuleEditorKeys.save);
+    expect(connection.applied!.single['params'], {
+      'modules[0]': '1',
+      'modules[1]': '2',
+      'filter.city': '杭州',
+      'page': '1',
+    });
+  });
+
   testWidgets('patch mode rejects empty patches, bad paths and bad params', (
     tester,
   ) async {
@@ -156,9 +177,9 @@ void main() {
 
     await setCode(tester, RuleEditorKeys.patch, '{"data.name": 1}');
     await tapKey(tester, const Key('expand-params'));
-    await setCode(tester, RuleEditorKeys.params, '{"id": {"nested": 1}}');
+    await setCode(tester, RuleEditorKeys.params, '{"modules": []}');
     await tapKey(tester, RuleEditorKeys.save);
-    expect(find.text('参数值只能是字符串、数字、布尔值或 null'), findsOneWidget);
+    expect(find.text('"modules" 是空数组，无法匹配'), findsOneWidget);
     expect(connection.applied, isNull);
   });
 
@@ -380,5 +401,122 @@ void main() {
       expect(connection.entries, isEmpty);
       expect(find.text('等待请求'), findsOneWidget);
     });
+  });
+
+  group('fixes from review', () {
+    testWidgets('searching keeps the editor visible under the find bar', (
+      tester,
+    ) async {
+      await openDevice(
+        tester,
+        traffic: [trafficEntry(1, '/api/a', response: '{"name":"real"}')],
+      );
+      await openRequest(tester, '/api/a');
+      await tester.tap(find.byTooltip('查找（⌘/Ctrl F）').first);
+      await tester.pumpAndSettle();
+      final bar = tester.getSize(find.byKey(const Key('code-find-bar')));
+      final editor = tester.getSize(find.byType(CodeEditor).first);
+      expect(bar.height, 41);
+      expect(editor.height, greaterThan(bar.height * 3));
+    });
+
+    testWidgets(
+      'parameter conditions prefill from the request, toggle and remove',
+      (tester) async {
+        final connection = await openDevice(
+          tester,
+          traffic: [
+            trafficEntry(
+              1,
+              '/api/order',
+              method: 'POST',
+              query: 'id=123',
+              request: '{"sku":"A1","filter":{"city":"杭州"}}',
+              response: '{"ok":true}',
+            ),
+          ],
+        );
+        await openRequest(tester, '/api/order');
+        await tapText(tester, '用此请求新建规则');
+        await tapKey(tester, const Key('expand-params'));
+        Map<String, dynamic> params() =>
+            jsonDecode(codeAt(tester, RuleEditorKeys.params).text)
+                as Map<String, dynamic>;
+        expect(params(), {'id': '123', 'sku': 'A1'});
+
+        await tapKey(tester, const ValueKey('param-filter.city'));
+        await tapKey(tester, const ValueKey('param-sku'));
+        expect(params(), {'id': '123', 'filter.city': '杭州'});
+        await tapKey(tester, RuleEditorKeys.save);
+        expect(connection.applied!.single['params'], {
+          'id': '123',
+          'filter.city': '杭州',
+        });
+
+        await tapKey(tester, const Key('remove-params'));
+        expect(find.byKey(const Key('expand-params')), findsOneWidget);
+        await tapKey(tester, RuleEditorKeys.save);
+        expect(connection.applied!.single.containsKey('params'), isFalse);
+      },
+    );
+
+    testWidgets('clicking a field in the reference response writes patches', (
+      tester,
+    ) async {
+      final connection = await openDevice(
+        tester,
+        traffic: [
+          trafficEntry(
+            1,
+            '/api/site',
+            response: '{"data":{"items":[{"name":"a"},{"name":"b"}]}}',
+          ),
+        ],
+      );
+      await openRequest(tester, '/api/site');
+      await tapText(tester, '用此请求新建规则');
+      await tapText(tester, '字段补丁');
+      expect(find.textContaining('参照响应 · 抓包响应'), findsOneWidget);
+
+      final reference = codeAt(tester, const Key('rule-reference-editor'));
+      final lines = reference.text.split('\n');
+      final line = lines.indexWhere((l) => l.contains('"b"'));
+      reference.selection = CodeLineSelection.collapsed(
+        index: line,
+        offset: lines[line].indexOf('"b"') + 1,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('data.items[1].name'), findsOneWidget);
+
+      await tapKey(tester, const Key('patch-wildcard'));
+      await tapKey(tester, const Key('patch-exact'));
+      expect(jsonDecode(codeAt(tester, RuleEditorKeys.patch).text), {
+        'data.items[*].name': 'b',
+        'data.items[1].name': 'b',
+      });
+      expect(find.text('补丁此字段（已添加）'), findsOneWidget);
+
+      await tapKey(tester, RuleEditorKeys.save);
+      expect((connection.applied!.single['patchBody'] as Map).keys, [
+        'data.items[*].name',
+        'data.items[1].name',
+      ]);
+    });
+
+    testWidgets(
+      'existing rules use the latest captured response as reference',
+      (tester) async {
+        await openDevice(
+          tester,
+          rules: [_profile],
+          traffic: [
+            trafficEntry(1, '/api/profile', response: '{"name":"real"}'),
+          ],
+        );
+        await tapText(tester, '/api/profile');
+        await tapText(tester, '字段补丁');
+        expect(find.textContaining('参照响应 · 抓包响应'), findsOneWidget);
+      },
+    );
   });
 }

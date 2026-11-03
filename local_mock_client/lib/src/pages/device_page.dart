@@ -34,9 +34,13 @@ class InspectTraffic extends Inspect {
 
 /// Editing a rule; [original] is null for a rule that is not saved yet.
 class InspectRule extends Inspect {
-  const InspectRule(this.draft, {this.original});
+  const InspectRule(this.draft, {this.original, this.sample});
   final Rule draft;
   final Rule? original;
+
+  /// Captured request the editor offers parameters and a reference
+  /// response from.
+  final Entry? sample;
 }
 
 class InspectGroup extends Inspect {
@@ -143,7 +147,11 @@ class _DevicePageState extends State<DevicePage> {
           ? const InspectNothing()
           : isGroup(fresh)
           ? InspectGroup(fresh, original: fresh)
-          : InspectRule(fresh, original: fresh);
+          : InspectRule(
+              fresh,
+              original: fresh,
+              sample: current is InspectRule ? current.sample : null,
+            );
     });
   }
 
@@ -165,11 +173,25 @@ class _DevicePageState extends State<DevicePage> {
     });
   }
 
+  /// Latest captured request that this rule's endpoint would match.
+  Entry? _sampleFor(Rule rule) {
+    final method = '${rule['method']}'.toUpperCase();
+    final host = (rule['host'] as String?)?.toLowerCase();
+    for (final entry in _connection.traffic.reversed) {
+      if ('${entry['method']}'.toUpperCase() == method &&
+          entry['path'] == rule['path'] &&
+          (host == null || '${entry['host']}'.toLowerCase() == host)) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
   void _openRule(Rule rule) => unawaited(
     _show(
       isGroup(rule)
           ? InspectGroup(rule, original: rule)
-          : InspectRule(rule, original: rule),
+          : InspectRule(rule, original: rule, sample: _sampleFor(rule)),
     ),
   );
 
@@ -177,7 +199,12 @@ class _DevicePageState extends State<DevicePage> {
       unawaited(_show(InspectRule(blankRule(_book.nextRuleId()))));
 
   void _ruleFromTraffic(Entry entry) => unawaited(
-    _show(InspectRule(ruleFromTraffic(entry, existingIds: _book.ids))),
+    _show(
+      InspectRule(
+        ruleFromTraffic(entry, existingIds: _book.ids),
+        sample: entry,
+      ),
+    ),
   );
 
   void _groupFromRecording(TrafficSession session) {
@@ -197,7 +224,7 @@ class _DevicePageState extends State<DevicePage> {
     }
   }
 
-  Future<void> _saveRule(Rule? original, Rule rule) async {
+  Future<void> _saveRule(Rule? original, Rule rule, Entry? sample) async {
     // A stale [original] throws synchronously and reaches the editor; push
     // failures are asynchronous and surface through [RuleBook.syncError].
     final saving = original == null
@@ -210,7 +237,7 @@ class _DevicePageState extends State<DevicePage> {
       _dirty = false;
       _inspect = isGroup(saved)
           ? InspectGroup(saved, original: saved)
-          : InspectRule(saved, original: saved);
+          : InspectRule(saved, original: saved, sample: sample);
     });
     final error = _book.syncError;
     toast(
@@ -395,8 +422,9 @@ class _DevicePageState extends State<DevicePage> {
           entry: entry,
           onCreateRule: () => _ruleFromTraffic(entry),
         );
-      case InspectRule(:final draft, :final original):
+      case InspectRule(:final draft, :final original, :final sample):
         return RuleEditor(
+          sample: sample,
           key: ObjectKey(original ?? draft),
           initial: draft,
           isNew: original == null,
@@ -406,7 +434,7 @@ class _DevicePageState extends State<DevicePage> {
           onDirtyChanged: _setDirty,
           onCancel: _cancelEdit,
           onDelete: original == null ? null : () => _delete(original),
-          onSave: (rule) => _saveRule(original, rule),
+          onSave: (rule) => _saveRule(original, rule, sample),
         );
       case InspectGroup(:final draft, :final original):
         // The id the group already holds in the list is not a conflict.

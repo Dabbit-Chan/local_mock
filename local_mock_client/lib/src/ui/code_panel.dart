@@ -104,10 +104,19 @@ class _CodePanelState extends State<CodePanel> {
   String? _error;
   late String _lastText = widget.controller.text;
 
+  /// Flips whenever the platform reports new fonts (on the web: CJK
+  /// fallback glyphs downloaded on demand).
+  bool _fontsFlip = false;
+
+  void _fontsChanged() {
+    if (mounted) setState(() => _fontsFlip = !_fontsFlip);
+  }
+
   @override
   void initState() {
     super.initState();
     widget.controller.addListener(_textChanged);
+    PaintingBinding.instance.systemFonts.addListener(_fontsChanged);
     _error = widget.validator?.call(_lastText);
   }
 
@@ -115,6 +124,7 @@ class _CodePanelState extends State<CodePanel> {
   void dispose() {
     _debounce?.cancel();
     widget.controller.removeListener(_textChanged);
+    PaintingBinding.instance.systemFonts.removeListener(_fontsChanged);
     _find.dispose();
     super.dispose();
   }
@@ -201,7 +211,10 @@ class _CodePanelState extends State<CodePanel> {
       ),
       style: CodeEditorStyle(
         fontFamily: monoFamily,
-        fontFamilyFallback: monoFallback,
+        // re_editor caches laid-out lines and never re-lays them out when
+        // fallback fonts arrive, leaving tofu for CJK text. A different
+        // (equivalent) fallback list is a layout change that clears it.
+        fontFamilyFallback: [...monoFallback, if (_fontsFlip) monoFamily],
         fontSize: 12.5,
         fontHeight: 1.55,
         textColor: p.ink,
@@ -327,7 +340,8 @@ class _FindBar extends StatelessWidget implements PreferredSizeWidget {
     if (value == null) return Size.zero;
     return Size(
       double.infinity,
-      value.replaceMode && !readOnly ? _row * 2 + 1 : _row,
+      // Rows plus the 1px bottom border.
+      (value.replaceMode && !readOnly ? _row * 2 : _row) + 1,
     );
   }
 
@@ -377,13 +391,18 @@ class _FindBar extends StatelessWidget implements PreferredSizeWidget {
           ),
         );
 
+    // CodeEditor stacks this widget unpositioned on top of the text and only
+    // shifts the text down by [preferredSize]; anything taller would cover it.
     return Container(
+      key: const Key('code-find-bar'),
+      height: preferredSize.height,
       decoration: BoxDecoration(
         color: p.paper,
         border: Border(bottom: BorderSide(color: p.rule)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           SizedBox(
             height: _row,

@@ -3,12 +3,15 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:local_mock_core/local_mock_core.dart';
 import 'package:re_editor/re_editor.dart';
 
 import '../format.dart';
+import '../json_paths.dart';
 import '../rule_book.dart';
+import '../rule_drafts.dart';
 import '../ui/code_panel.dart';
 import '../ui/primitives.dart';
 import '../ui/theme.dart';
@@ -24,6 +27,7 @@ abstract final class RuleEditorKeys {
   static const recordedQuery = Key('rule-recorded-query');
   static const recordedBody = Key('rule-recorded-body');
   static const save = Key('rule-save');
+  static const reference = Key('rule-reference');
 }
 
 /// Inline editor for one response rule.
@@ -42,9 +46,14 @@ class RuleEditor extends StatefulWidget {
     this.onDirtyChanged,
     this.groupName,
     this.matchRecordedParams = true,
+    this.sample,
   });
 
   final Rule initial;
+
+  /// A captured request for this endpoint: its parameters are offered as
+  /// conditions and its JSON response is shown as the patch reference.
+  final Map<String, dynamic>? sample;
 
   /// IDs used by sibling rules.
   final Set<String> existingIds;
@@ -135,6 +144,11 @@ class _RuleEditorState extends State<RuleEditor> {
       ? ResponseMode.patch
       : ResponseMode.replace;
 
+  late final List<ParamCandidate> _candidates = widget.sample == null
+      ? const []
+      : requestParams(widget.sample!);
+  late final _reference = referenceResponse(_i, widget.sample);
+
   final _errors = <String, String>{};
   String? _failure;
   bool _saving = false;
@@ -161,10 +175,122 @@ class _RuleEditorState extends State<RuleEditor> {
     for (final input in _inputs) {
       input.addListener(_changed);
     }
+    // The parameter picker and the patch reference reflect these texts.
+    _params.addListener(_refresh);
+    _patch.addListener(_refresh);
+  }
+
+  late String _paramsText = _params.text;
+  late String _patchText = _patch.text;
+
+  void _refresh() {
+    if (_params.text == _paramsText && _patch.text == _patchText) return;
+    _paramsText = _params.text;
+    _patchText = _patch.text;
+    _rebuild();
+  }
+
+  /// re_editor controllers can notify while the editor is being built;
+  /// anything that rebuilds widgets then must wait for the frame to finish.
+  void _afterBuild(VoidCallback action) {
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (mounted) action();
+      });
+    } else {
+      action();
+    }
+  }
+
+  void _rebuild() => _afterBuild(() {
+    if (mounted) setState(() {});
+  });
+
+  /// Decoded JSON object of [controller], `{}` when empty, null when invalid.
+  static Map<String, dynamic>? _objectOf(CodeLineEditingController controller) {
+    if (controller.text.trim().isEmpty) return {};
+    try {
+      final value = jsonDecode(controller.text);
+      return value is Map<String, dynamic> ? value : null;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  void _expandParams() {
+    if (_params.text.trim().isEmpty) {
+      final initial = {
+        for (final c in _candidates)
+          if (c.topLevel) c.key: c.value,
+      };
+      if (initial.isNotEmpty) _params.text = prettyJson(initial);
+    }
+    setState(() => _showParams = true);
+  }
+
+  void _removeParams() {
+    _params.text = '';
+    setState(() {
+      _showParams = false;
+      _errors.remove('params');
+    });
+  }
+
+  void _removeHeaders() {
+    _headers.text = '';
+    setState(() {
+      _showHeaders = false;
+      _errors.remove('headers');
+    });
+  }
+
+  /// The params condition flattened to `path: value`, or null when the text
+  /// is not a valid condition.
+  Map<String, Object?>? _flatParams() {
+    final raw = _objectOf(_params);
+    if (raw == null) return null;
+    try {
+      return flattenParams(raw);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  void _toggleParam(ParamCandidate candidate) {
+    final params = _flatParams();
+    if (params == null) {
+      toast(context, '参数条件不是合法的 JSON，先修正再点选');
+      return;
+    }
+    if (params.containsKey(candidate.key)) {
+      params.remove(candidate.key);
+    } else {
+      params[candidate.key] = candidate.value;
+    }
+    _params.text = params.isEmpty ? '' : prettyJson(params);
+  }
+
+  /// Adds `path: value` to the patch, keeping existing entries and order.
+  void _addPatch(String path, Object? value) {
+    final patch = _objectOf(_patch);
+    if (patch == null) {
+      toast(context, '字段补丁不是合法的 JSON，先修正再点选');
+      return;
+    }
+    if (patch.containsKey(path)) {
+      toast(context, '补丁里已经有 $path');
+      return;
+    }
+    patch[path] = value;
+    _patch.text = prettyJson(patch);
+    setState(() => _errors.remove('patch'));
   }
 
   @override
   void dispose() {
+    _params.removeListener(_refresh);
+    _patch.removeListener(_refresh);
     for (final input in _inputs) {
       input.removeListener(_changed);
       (input as ChangeNotifier).dispose();
@@ -191,8 +317,9 @@ class _RuleEditorState extends State<RuleEditor> {
   void _changed() {
     final dirty = widget.isNew || _snapshot() != _baseline;
     if (dirty != _dirty) {
-      setState(() => _dirty = dirty);
-      widget.onDirtyChanged?.call(dirty);
+      _dirty = dirty;
+      _rebuild();
+      _afterBuild(() => widget.onDirtyChanged?.call(dirty));
     }
   }
 
@@ -245,14 +372,17 @@ class _RuleEditorState extends State<RuleEditor> {
     final delay = _int('delay', _delay.text, 0, 60000, '延迟');
     final patching = _mode == ResponseMode.patch;
 
-    final params = _object('params', _params.text, '参数条件');
-    if (params != null) {
-      if (params.keys.any((k) => k.trim().isEmpty)) {
+    Map<String, Object?>? params;
+    final rawParams = _object('params', _params.text, '参数条件');
+    if (rawParams != null) {
+      if (rawParams.keys.any((k) => k.trim().isEmpty)) {
         _errors['params'] = '参数名不能为空';
-      } else if (params.values.any(
-        (v) => v != null && v is! String && v is! num && v is! bool,
-      )) {
-        _errors['params'] = '参数值只能是字符串、数字、布尔值或 null';
+      } else {
+        try {
+          params = flattenParams(rawParams);
+        } on FormatException catch (error) {
+          _errors['params'] = error.message;
+        }
       }
     }
 
@@ -399,6 +529,7 @@ class _RuleEditorState extends State<RuleEditor> {
     String? help,
     bool format = true,
     VoidCallback? onExpand,
+    VoidCallback? onRemove,
   }) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
@@ -428,6 +559,13 @@ class _RuleEditorState extends State<RuleEditor> {
             formatAction: format,
             editorKey: key,
             onSave: () => unawaited(_submit()),
+            trailing: onRemove == null
+                ? null
+                : TextButton(
+                    key: Key('remove-$errorKey'),
+                    onPressed: onRemove,
+                    child: const Text('移除'),
+                  ),
           ),
         ),
       if (_errors[errorKey] != null && onExpand == null) ...[
@@ -626,16 +764,26 @@ class _RuleEditorState extends State<RuleEditor> {
                             '参数条件（可选）',
                             _params,
                             128,
-                            onExpand: _showParams
-                                ? null
-                                : () => setState(() => _showParams = true),
+                            onExpand: _showParams ? null : _expandParams,
+                            onRemove: _removeParams,
                             validator: validateJsonObject,
                             hint: '{"id": "123"}',
                             help:
                                 '只在这些参数全部相等时命中，其他参数不限。'
                                 '先查 URL query，再查 JSON 或表单请求体；'
-                                '嵌套字段写成 "filter.id"。留空则不看参数。',
+                                '嵌套字段可直接写嵌套 JSON，也可写成路径 "filter.id"、'
+                                '"modules[0]"，保存时统一展开为路径。'
+                                '数组按下标逐个比较，请求里多出的元素不影响命中。'
+                                '留空则不看参数。',
                           ),
+                          if (_showParams && _candidates.isNotEmpty) ...[
+                            const SizedBox(height: Space.m),
+                            _ParamPicker(
+                              candidates: _candidates,
+                              selected: _flatParams()?.keys.toSet() ?? const {},
+                              onToggle: _toggleParam,
+                            ),
+                          ],
                           if (_hasRecordedRequest) ...[
                             const SizedBox(height: Space.l),
                             Text(
@@ -714,21 +862,32 @@ class _RuleEditorState extends State<RuleEditor> {
                             ),
                           ]),
                           const SizedBox(height: Space.l),
-                          if (patching)
+                          if (patching) ...[
+                            _PatchReference(
+                              key: RuleEditorKeys.reference,
+                              reference: _reference,
+                              height: _reference == null ? 0 : tall * 0.55,
+                              patched:
+                                  _objectOf(_patch)?.keys.toSet() ?? const {},
+                              onPick: _addPatch,
+                            ),
+                            const SizedBox(height: Space.l),
                             _code(
                               RuleEditorKeys.patch,
                               'patch',
                               '字段补丁',
                               _patch,
-                              tall,
+                              _reference == null
+                                  ? tall
+                                  : math.max(200.0, tall * 0.45),
                               validator: validateJsonObject,
                               hint: '{"data.items[*].name": "很长的名称"}',
                               help:
                                   '键是字段路径，值是新的 JSON 值，按顺序应用。'
                                   'data.items[0].name 改单个元素，data.items[*].name 改全部元素；'
                                   '越界下标会被跳过。响应不是 JSON 或父级不存在时，原样返回真实响应。',
-                            )
-                          else ...[
+                            ),
+                          ] else ...[
                             _code(
                               RuleEditorKeys.headers,
                               'headers',
@@ -738,6 +897,7 @@ class _RuleEditorState extends State<RuleEditor> {
                               onExpand: _showHeaders
                                   ? null
                                   : () => setState(() => _showHeaders = true),
+                              onRemove: _removeHeaders,
                               validator: validateJsonObject,
                               hint: '{"content-type": "application/json"}',
                               help:
@@ -843,4 +1003,264 @@ class _MethodPicker extends StatelessWidget {
       if (method != null) onChanged(method);
     },
   );
+}
+
+/// Parameters of the sample request as toggle chips.
+class _ParamPicker extends StatelessWidget {
+  const _ParamPicker({
+    required this.candidates,
+    required this.selected,
+    required this.onToggle,
+  });
+
+  final List<ParamCandidate> candidates;
+  final Set<String> selected;
+  final ValueChanged<ParamCandidate> onToggle;
+
+  static const _limit = 60;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final shown = candidates.take(_limit);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Eyebrow('抓包请求中的参数'),
+            const SizedBox(width: Space.s),
+            Text('点击加入或移除', style: context.text.bodySmall),
+          ],
+        ),
+        const SizedBox(height: Space.s),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final c in shown)
+              Tooltip(
+                message: c.fromQuery ? 'URL query' : '请求体',
+                child: Semantics(
+                  button: true,
+                  selected: selected.contains(c.key),
+                  child: InkWell(
+                    key: ValueKey('param-${c.key}'),
+                    onTap: () => onToggle(c),
+                    child: Container(
+                      constraints: const BoxConstraints(maxWidth: 320),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: selected.contains(c.key)
+                            ? p.ink
+                            : Colors.transparent,
+                        border: Border.all(
+                          color: selected.contains(c.key) ? p.ink : p.rule,
+                        ),
+                      ),
+                      child: Text(
+                        '${c.key} = ${c.value is String ? c.value : jsonEncode(c.value)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: mono(
+                          context,
+                          size: 12,
+                          color: selected.contains(c.key) ? p.paper : p.ink,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        if (candidates.length > _limit) ...[
+          const SizedBox(height: 4),
+          Text(
+            '另有 ${candidates.length - _limit} 个参数未列出，可直接在上方 JSON 中填写。',
+            style: context.text.bodySmall,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Read-only response to write patches against. Clicking a field name or
+/// value selects it; the bar below turns the selection into a patch entry.
+class _PatchReference extends StatefulWidget {
+  const _PatchReference({
+    super.key,
+    required this.reference,
+    required this.height,
+    required this.patched,
+    required this.onPick,
+  });
+
+  final ({Object? json, String label})? reference;
+  final double height;
+
+  /// Paths already present in the patch.
+  final Set<String> patched;
+  final void Function(String path, Object? value) onPick;
+
+  @override
+  State<_PatchReference> createState() => _PatchReferenceState();
+}
+
+class _PatchReferenceState extends State<_PatchReference> {
+  late final String _text = widget.reference == null
+      ? ''
+      : prettyJson(widget.reference!.json);
+  late final _controller = CodeLineEditingController.fromText(_text);
+  late final List<JsonNode> _nodes = indexJson(_text) ?? const [];
+  late final List<int> _lineStarts = () {
+    final starts = [0];
+    for (var i = 0; i < _text.length; i++) {
+      if (_text.codeUnitAt(i) == 0x0A) starts.add(i + 1);
+    }
+    return starts;
+  }();
+  List<Object>? _path;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_selectionChanged);
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_selectionChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _selectionChanged() {
+    final sel = _controller.selection;
+    if (sel.extentIndex >= _lineStarts.length) return;
+    final offset = _lineStarts[sel.extentIndex] + sel.extentOffset;
+    final path = pathAt(_nodes, offset);
+    if (path == null || path.isEmpty) return;
+    if (_path == null || formatPath(_path!) != formatPath(path)) {
+      setState(() => _path = path);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final reference = widget.reference;
+    if (reference == null) {
+      return Container(
+        padding: const EdgeInsets.all(Space.l),
+        color: p.well,
+        child: Text(
+          '没有可参照的 JSON 响应。用这个接口的请求新建规则，'
+          '或让 App 先请求一次这个接口，就可以在这里点选字段生成补丁。',
+          style: context.text.bodySmall,
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: widget.height,
+          child: CodePanel(
+            label: '参照响应 · ${reference.label}',
+            controller: _controller,
+            readOnly: true,
+            editorKey: const Key('rule-reference-editor'),
+          ),
+        ),
+        _selectionBar(context, reference.json),
+      ],
+    );
+  }
+
+  Widget _selectionBar(BuildContext context, Object? json) {
+    final p = context.palette;
+    final path = _path;
+    Widget bar(List<Widget> children) => Container(
+      constraints: const BoxConstraints(minHeight: 48),
+      padding: const EdgeInsets.symmetric(horizontal: Space.m, vertical: 6),
+      decoration: BoxDecoration(
+        border: Border(
+          left: BorderSide(color: p.rule),
+          right: BorderSide(color: p.rule),
+          bottom: BorderSide(color: p.rule),
+        ),
+      ),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: Space.s,
+        runSpacing: 4,
+        children: children,
+      ),
+    );
+
+    if (path == null) {
+      return bar([
+        Text('点击上方响应中的任意字段名或值，即可为它生成补丁。', style: context.text.bodySmall),
+      ]);
+    }
+    if (!isAddressable(path)) {
+      return bar([
+        Text(
+          '这个字段的名称包含 . 或 [ ]，无法用补丁路径定位。',
+          style: context.text.bodySmall!.copyWith(color: p.signal),
+        ),
+      ]);
+    }
+    final value = valueAt(json, path);
+    final exact = formatPath(path);
+    final arrays = {
+      for (final (i, s) in path.indexed)
+        if (s is int) i,
+    };
+    final wildcard = arrays.isEmpty
+        ? null
+        : formatPath(path, wildcards: arrays);
+    final preview = value is Map
+        ? '{…} ${value.length} 个字段'
+        : value is List
+        ? '[…] ${value.length} 个元素'
+        : jsonEncode(value);
+
+    Widget action(String label, String target, Key key) {
+      final done = widget.patched.contains(target);
+      return OutlinedButton(
+        key: key,
+        onPressed: done ? null : () => widget.onPick(target, value),
+        child: Text(done ? '$label（已添加）' : label),
+      );
+    }
+
+    return bar([
+      const Eyebrow('已选'),
+      SelectableText(
+        exact,
+        style: mono(context, size: 12.5, weight: FontWeight.w600),
+      ),
+      ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 260),
+        child: Text(
+          preview,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: mono(context, size: 12, color: p.muted),
+        ),
+      ),
+      action('补丁此字段', exact, const Key('patch-exact')),
+      if (wildcard != null)
+        Tooltip(
+          message: wildcard,
+          child: action('补丁全部元素', wildcard, const Key('patch-wildcard')),
+        ),
+    ]);
+  }
 }
