@@ -20,6 +20,15 @@ dart run tool/relay_host.dart 9090
 
 控制台总是连接 **提供它的那个地址**（`Uri.base.origin`），所以页面本身没有地址输入框，构建时也不需要 `--dart-define`。`LOCAL_MOCK_SERVER` 只给 App 用。
 
+Relay 默认只监听 `127.0.0.1`。部署到服务器或容器时可以用环境变量调整：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `LOCAL_MOCK_HOST` | `127.0.0.1` | 监听地址，`0.0.0.0` 表示允许其他机器访问 |
+| `LOCAL_MOCK_WEB_DIR` | `build/web` | 控制台网页所在目录 |
+
+部署时不需要 Dart 环境，可以交叉编译成可执行文件：`dart compile exe tool/relay_host.dart --target-os=linux --target-arch=x64 -o local_mock_relay`。Relay 没有鉴权，只应在内网访问。
+
 只调界面时可以 `flutter run -d chrome`，但开发服务器不是 Relay，页面会一直显示“正在连接 Relay”。需要真实数据时用 Relay 托管的构建。
 
 ## 页面

@@ -343,6 +343,12 @@ class LocalMockRelay {
   }
 }
 
+/// Usage: `dart run tool/relay_host.dart [port]`.
+///
+/// Optional environment variables (for container deployment):
+/// - `LOCAL_MOCK_HOST`: listen address, default `127.0.0.1`. Use `0.0.0.0`
+///   to accept connections from other machines.
+/// - `LOCAL_MOCK_WEB_DIR`: console files, default `build/web`.
 Future<void> main(List<String> args) async {
   final port = args.isEmpty ? 9090 : int.tryParse(args.single);
   if (port == null || port < 1 || port > 65535) {
@@ -350,14 +356,19 @@ Future<void> main(List<String> args) async {
     exitCode = 64;
     return;
   }
-  final relay = LocalMockRelay();
+  final env = Platform.environment;
+  final host = env['LOCAL_MOCK_HOST'] ?? '127.0.0.1';
+  final webDir = env['LOCAL_MOCK_WEB_DIR'];
+  final relay = LocalMockRelay(
+    webDirectory: webDir == null ? null : Directory(webDir),
+  );
   if (!await relay.webDirectory.exists()) {
     stderr.writeln('Web files not found. Run flutter build web first.');
     exitCode = 66;
     return;
   }
   try {
-    await relay.start(port: port);
+    await relay.start(host: host, port: port);
   } on SocketException catch (error) {
     if ([48, 98, 10048].contains(error.osError?.errorCode)) {
       stderr.writeln(
@@ -368,9 +379,13 @@ Future<void> main(List<String> args) async {
     }
     rethrow;
   }
-  stdout.writeln('Local Mock: http://127.0.0.1:$port');
-  ProcessSignal.sigint.watch().listen((_) async {
+  stdout.writeln('Local Mock: http://$host:$port');
+  Future<void> shutdown(ProcessSignal _) async {
     await relay.close();
     exit(0);
-  });
+  }
+
+  ProcessSignal.sigint.watch().listen(shutdown);
+  // Containers are stopped with SIGTERM (not supported on Windows).
+  if (!Platform.isWindows) ProcessSignal.sigterm.watch().listen(shutdown);
 }
