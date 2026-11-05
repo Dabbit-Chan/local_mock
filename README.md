@@ -67,7 +67,7 @@ local_mock 是给 Flutter App 用的接口 Mock 与抓包工具，面向开发�
 
 ```mermaid
 flowchart LR
-    A["📱 Flutter App<br/>+ 适配器"] -- "WebSocket<br/>上报请求 / 接收规则" --> R["⚙️ Relay<br/>Dart 进程"]
+    A["📱 Flutter App<br/>+ 适配器"] -- "WebSocket<br/>上报请求 / 接收规则" --> R["⚙️ Relay 进程"]
     C["🖥️ Web 控制台<br/>浏览器"] -- "WebSocket<br/>查看请求 / 下发规则" --> R
 ```
 
