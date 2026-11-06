@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-const diagKeep = 100
+const (
+	diagKeep  = 100 // disconnects retained in memory
+	diagShown = 10  // newest disconnects written to the /diag response
+)
 
 type serverInfo struct {
 	Instance  string `json:"instance"`
@@ -45,6 +48,19 @@ func (d *diagLog) recent(n int) []disconnect {
 	return out
 }
 
+// stats counts the retained disconnects by kind. The response only carries the
+// newest few entries; these totals keep "how often and why" visible even when
+// a flapping client pushes everything else out of the list.
+func (d *diagLog) stats() (int, map[string]int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	kinds := map[string]int{}
+	for _, it := range d.items {
+		kinds[it.Kind]++
+	}
+	return len(d.items), kinds
+}
+
 func newServerInfo() serverInfo {
 	h, _ := os.Hostname()
 	return serverInfo{
@@ -74,20 +90,19 @@ func (r *Relay) handleDiag(w http.ResponseWriter, req *http.Request) {
 		})
 	}
 	r.mu.Unlock()
+
+	total, kinds := r.diag.stats()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(map[string]any{
-		"server":      r.info,
-		"now":         time.Now().UTC().Format(time.RFC3339Nano),
-		"pingSeconds": r.pingInterval.Seconds(),
-		"active":      active,
-		"disconnects": r.diag.recent(diagKeep),
-		"requestSeen": map[string]any{
-			"remote":  req.RemoteAddr,
-			"host":    req.Host,
-			"headers": req.Header,
-		},
+		"server":          r.info,
+		"now":             time.Now().UTC().Format(time.RFC3339Nano),
+		"pingSeconds":     r.pingInterval.Seconds(),
+		"active":          active,
+		"disconnectTotal": total,
+		"disconnectKinds": kinds,
+		"disconnects":     r.diag.recent(diagShown),
 	})
 }
