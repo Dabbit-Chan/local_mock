@@ -129,7 +129,7 @@ class _DevicePageState extends State<DevicePage> {
   }
 
   /// Keeps an open, unmodified editor pointing at the live rule object
-  /// after the device replaced the list.
+  /// after another browser operation replaced the list.
   void _rulesChanged() {
     if (!mounted || _dirty) return;
     final current = _inspect;
@@ -242,16 +242,20 @@ class _DevicePageState extends State<DevicePage> {
     final error = _book.syncError;
     toast(
       context,
-      error == null
-          ? (_connection.ready ? '已保存并同步到设备' : '已保存（设备未连接，尚未同步）')
-          : '已保存，但同步失败：$error',
+      _book.storageError != null
+          ? '浏览器保存失败：${_book.storageError}'
+          : error != null
+          ? '已保存在浏览器，但同步失败：$error'
+          : _book.canAutoSync && _connection.ready
+          ? '已保存并同步到设备'
+          : '已保存在浏览器，尚未下发到设备',
     );
   }
 
   Future<void> _saveGroup(Rule? original, Rule group) async {
     if (original != null &&
         !_book.rules.any((rule) => identical(rule, original))) {
-      throw StateError('这个录制组已被设备或其他操作更新，请重新打开后再保存');
+      throw StateError('这个录制组已被其他操作更新，请重新打开后再保存');
     }
     await _book.upsertGroup(group).catchError((_) {});
     if (!mounted) return;
@@ -263,7 +267,11 @@ class _DevicePageState extends State<DevicePage> {
     final error = _book.syncError;
     toast(
       context,
-      error == null ? '录制组「${group['name']}」已保存' : '录制组已保存，但同步失败：$error',
+      _book.storageError != null
+          ? '浏览器保存失败：${_book.storageError}'
+          : error == null
+          ? '录制组「${group['name']}」已保存在浏览器'
+          : '录制组已保存，但同步失败：$error',
     );
   }
 
@@ -349,7 +357,7 @@ class _DevicePageState extends State<DevicePage> {
         title: _connection.connected ? '设备不在线' : '正在连接 Relay',
         body: _connection.connected
             ? '设备 ${widget.deviceId} 当前没有连接。App 重新调用 LocalMock.connect 后，'
-                  '本页会自动载入它的规则和请求。'
+                  '本页会自动载入此浏览器保存的规则和设备请求。'
             : '${_connection.status}。连上之后，如果这台设备在线会自动载入。',
         action: OutlinedButton(
           onPressed: () => context.go(Routes.home),
@@ -369,7 +377,7 @@ class _DevicePageState extends State<DevicePage> {
         if (!online)
           Notice(
             message: _connection.connected
-                ? '设备已离线。下面是断开前的规则和请求；App 内已生效的规则不受影响，设备重新连接后自动刷新。'
+                ? '设备已离线。规则保存在此浏览器中；App 冷启动后需点击“同步到设备”才能生效。'
                 : 'Relay 连接已断开，正在重连。下面是断开前的数据，期间的修改不会同步到设备。',
           ),
         Expanded(
@@ -538,9 +546,9 @@ class _InspectorIntro extends StatelessWidget {
                   point('C', '参数条件', '让规则只对某个 ID、某种传参生效，其他请求不受影响。可与以上两种方式组合。'),
                   point('D', '录制组', '把一段录制里的全部请求变成一组规则，整组开关，用于离线复现一条完整流程。'),
                   Text(
-                    '规则保存在设备的内存里：保存、开关、删除、排序都会立即同步，'
-                    '从设备的下一个请求开始生效。App 冷启动后需要重新连接，'
-                    'Relay 会自动恢复它上次确认的规则。',
+                    '规则按设备保存在此浏览器中。App 冷启动后规则为空，'
+                    '点击“同步到设备”后生效；本次 App 会话内，'
+                    '保存、开关、删除、排序都会自动同步，从下一个请求开始生效。',
                     style: context.text.bodySmall,
                   ),
                 ],

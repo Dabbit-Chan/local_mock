@@ -267,7 +267,7 @@ func (r *Relay) hello(p *peer, msg map[string]any) error {
 		r.mu.Unlock()
 		return errors.New("设备 ID 已被另一个 App 使用，请设置唯一 deviceId")
 	}
-	if prev == nil && !rulesOK {
+	if !rulesOK {
 		r.mu.Unlock()
 		return errors.New("Invalid app state")
 	}
@@ -278,45 +278,21 @@ func (r *Relay) hello(p *peer, msg map[string]any) error {
 	d := prev
 	if d == nil {
 		d = &device{id: id}
-		d.rules = append([]any{}, rules...)
 	}
 	if d.session != session && prev != nil {
 		d.traffic = nil
 		d.epoch++
 	}
-	d.name, d.session, d.peer, d.ready = name, session, p, false
+	d.rules = append([]any{}, rules...)
+	d.name, d.session, d.peer, d.ready = name, session, p, true
 	d.supportsRecording = state["supportsRecordingMocks"] == true
 	r.devices[id] = d
 	p.deviceID.Store(id)
 	p.initialized.Store(true)
-	restore := d.rules
 	r.mu.Unlock()
 
 	p.send(map[string]any{"id": msg["id"], "result": map[string]any{}})
-	if prev == nil {
-		r.mu.Lock()
-		d.ready = true
-		r.mu.Unlock()
-		r.broadcastDevices()
-		return nil
-	}
-	// Restore only rules acknowledged by an app, never a failed edit. This waits
-	// for the app's reply, which arrives on this very socket, so run it aside.
-	go func() {
-		if _, err := r.forward(d, "replaceRules", map[string]any{"rules": restore}); err != nil {
-			r.fail(p, nil, err)
-			return
-		}
-		r.mu.Lock()
-		same := d.peer == p
-		if same {
-			d.ready = true
-		}
-		r.mu.Unlock()
-		if same {
-			r.broadcastDevices()
-		}
-	}()
+	r.broadcastDevices()
 	return nil
 }
 
@@ -376,7 +352,8 @@ func (r *Relay) consoleRequest(msg map[string]any) (map[string]any, error) {
 	if inner == nil {
 		inner = map[string]any{}
 	}
-	if _, err := r.forward(d, method, inner); err != nil {
+	expectedSession, _ := args["sessionId"].(string)
+	if _, err := r.forward(d, method, inner, expectedSession); err != nil {
 		return nil, err
 	}
 	r.mu.Lock()
@@ -394,8 +371,12 @@ func (r *Relay) consoleRequest(msg map[string]any) (map[string]any, error) {
 	return snap, nil
 }
 
-func (r *Relay) forward(d *device, method string, args map[string]any) (map[string]any, error) {
+func (r *Relay) forward(d *device, method string, args map[string]any, expectedSession string) (map[string]any, error) {
 	r.mu.Lock()
+	if expectedSession != "" && expectedSession != d.session {
+		r.mu.Unlock()
+		return nil, errors.New("App 会话已变化，请重新同步到设备")
+	}
 	if d.busy {
 		r.mu.Unlock()
 		return nil, errors.New("设备正在同步，请稍后重试")

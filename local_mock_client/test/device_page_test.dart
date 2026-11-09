@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:re_editor/re_editor.dart';
 import 'package:local_mock_client/src/panes/rule_editor.dart';
+import 'package:local_mock_client/src/rule_store.dart';
 import 'package:local_mock_client/src/panes/traffic_list.dart';
 import 'package:local_mock_client/src/ui/primitives.dart';
 
@@ -59,6 +60,43 @@ Future<void> openRequest(WidgetTester tester, String path) async {
 }
 
 void main() {
+  testWidgets('cold start keeps browser rules and requires one manual sync', (
+    tester,
+  ) async {
+    final connection = FakeConnection();
+    addTearDown(connection.dispose);
+    final store = MemoryRuleStore()
+      ..save(
+        'phone',
+        SavedRules(rules: [_profile], syncedSession: 'previous-session'),
+      );
+    await pumpApp(
+      tester,
+      connection: connection,
+      ruleStore: store,
+      location: '/devices/phone',
+    );
+    expect(find.text('App 已重启、规则未下发'), findsOneWidget);
+    expect(find.text('/api/profile'), findsOneWidget);
+    expect(connection.pushes, 0);
+    await tester.tap(find.byType(SquareToggle).first);
+    await tester.pumpAndSettle();
+    expect(connection.pushes, 0);
+    expect(store.load('phone')!.rules.single['enabled'], isFalse);
+    await tapKey(tester, const Key('sync-rules-to-device'));
+    expect(connection.pushes, 1);
+    expect(find.text('App 已重启、规则未下发'), findsNothing);
+    await tester.tap(find.byType(SquareToggle).first);
+    await tester.pumpAndSettle();
+    expect(connection.pushes, 2);
+    connection.session = 'next-cold-start';
+    connection.deviceReplacesRules([]);
+    await tester.pumpAndSettle();
+    expect(find.text('App 已重启、规则未下发'), findsOneWidget);
+    expect(find.text('/api/profile'), findsOneWidget);
+    expect(connection.pushes, 2);
+  });
+
   testWidgets('lists the device rules in order with their summaries', (
     tester,
   ) async {
@@ -219,9 +257,7 @@ void main() {
     );
   });
 
-  testWidgets('saving fails clearly when the device replaced the rule', (
-    tester,
-  ) async {
+  testWidgets('device updates do not replace browser edits', (tester) async {
     final connection = await openDevice(tester, rules: [_profile]);
     await tapText(tester, '/api/profile');
     await tester.enterText(field('path'), '/api/mine');
@@ -231,11 +267,10 @@ void main() {
     ]);
     await tester.pumpAndSettle();
     await tapKey(tester, RuleEditorKeys.save);
-    expect(find.textContaining('已被设备或其他操作更新'), findsOneWidget);
-    expect(connection.applied, isNull);
+    expect(connection.applied!.single['path'], '/api/mine');
   });
 
-  testWidgets('an untouched editor follows the device rule list', (
+  testWidgets('an untouched editor keeps the browser rule list', (
     tester,
   ) async {
     final connection = await openDevice(tester, rules: [_profile]);
@@ -246,7 +281,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       tester.widget<TextField>(field('path')).controller!.text,
-      '/api/theirs',
+      '/api/profile',
     );
   });
 

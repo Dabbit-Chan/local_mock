@@ -103,11 +103,9 @@ class LocalMockRelay {
                   device!.traffic.clear();
                   device!.epoch++;
                 }
-                if (previous == null) {
-                  device!.rules = List.of(
-                    (args['state'] as Map)['rules'] as List,
-                  );
-                }
+                device!.rules = List.of(
+                  (args['state'] as Map)['rules'] as List,
+                );
                 final appState = args['state'] as Map;
                 device!.supportsRecordingMocks =
                     appState['supportsRecordingMocks'] == true;
@@ -118,12 +116,6 @@ class LocalMockRelay {
                   'id': message['id'],
                   'result': <String, dynamic>{},
                 });
-                if (previous != null) {
-                  // Restore only rules acknowledged by an app, never a failed edit.
-                  await _forward(device!, 'replaceRules', {
-                    'rules': device!.rules,
-                  });
-                }
                 if (device!.socket != socket) return;
                 device!.ready = true;
                 _broadcastDevices();
@@ -201,6 +193,9 @@ class LocalMockRelay {
     final device = _devices[args['deviceId']];
     if (device == null || device.socket == null || !device.ready) {
       throw StateError('设备已离线');
+    }
+    if (args['sessionId'] != null && args['sessionId'] != device.session) {
+      throw StateError('App 会话已变化，请重新同步到设备');
     }
     final method = args['method'] as String;
     if (![

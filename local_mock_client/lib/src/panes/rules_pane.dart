@@ -131,13 +131,21 @@ class _SyncLine extends StatelessWidget {
     final error = book.syncError;
     final String text;
     Color color = p.muted;
-    if (error != null) {
+    if (book.storageError != null) {
+      text = book.storageError!;
+      color = p.signal;
+    } else if (error != null) {
       text = '同步失败：$error';
       color = p.signal;
-    } else if (!connection.ready && connection.working) {
+    } else if (connection.syncingRules) {
       text = '正在同步到设备…';
+    } else if (!connection.ready && connection.working) {
+      text = connection.status;
     } else if (!connection.ready) {
-      text = '设备未连接：修改只保存在本页，设备重新连接后会以设备上的规则为准';
+      text = '设备未连接：规则保存在此浏览器中';
+      color = p.signal;
+    } else if (!book.autoSyncEnabled) {
+      text = 'App 已重启、规则未下发';
       color = p.signal;
     } else {
       final remote = connection.remoteRuleCount;
@@ -148,11 +156,27 @@ class _SyncLine extends StatelessWidget {
         horizontal: Space.gutter,
         vertical: 10,
       ),
-      child: Text(
-        text,
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-        style: context.text.bodySmall!.copyWith(color: color),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: context.text.bodySmall!.copyWith(color: color),
+            ),
+          ),
+          if (!book.autoSyncEnabled || error != null) ...[
+            const SizedBox(width: Space.s),
+            OutlinedButton(
+              key: const Key('sync-rules-to-device'),
+              onPressed: connection.ready
+                  ? () => unawaited(book.push().catchError((_) {}))
+                  : null,
+              child: const Text('同步到设备'),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -177,7 +201,7 @@ class _RulesMenu extends StatelessWidget {
         title: '导入规则',
         body:
             '文件中有 ${imported.length} 条规则，将替换当前全部 ${before.length} 条规则'
-            '${services.connection.ready ? '，并立即同步到设备' : ''}。',
+            '${book.canAutoSync && services.connection.ready ? '，并立即同步到设备' : '，保存在此浏览器中'}。',
         confirmLabel: '替换',
       );
       if (!ok || !context.mounted) return;
@@ -209,7 +233,7 @@ class _RulesMenu extends StatelessWidget {
     final ok = await confirm(
       context,
       title: '清空设备上的规则',
-      body: '设备上的全部规则会被删除，本页列表也会清空。之后所有请求都照常访问网络。',
+      body: '此浏览器保存的规则将全部删除，已开启自动同步时也会清空设备上的规则。之后所有请求都照常访问网络。',
       confirmLabel: '清空',
       destructive: true,
     );

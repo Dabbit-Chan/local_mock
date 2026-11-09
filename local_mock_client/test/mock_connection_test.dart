@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:local_mock_core/local_mock_core.dart';
 import 'package:local_mock_client/src/mock_connection.dart';
+import 'package:local_mock_client/src/rule_book.dart';
+import 'support/harness.dart' show MemoryRuleStore;
 import '../tool/relay_host.dart';
 import 'package:local_mock_transport/local_mock_transport.dart';
 
@@ -349,6 +351,36 @@ void main() {
     },
   );
 
+  test(
+    'only rule updates report syncing rules while device commands are busy',
+    () async {
+      final app = await startApp('a');
+      await connection.connect(address);
+      app.delay = Completer<void>();
+      final reading = connection.selectTarget('a');
+      expect(connection.working, isTrue);
+      expect(connection.syncingRules, isFalse);
+      app.delay!.complete();
+      await reading;
+
+      app.delay = Completer<void>();
+      final syncing = connection.apply(ruleJson('saved'));
+      expect(connection.working, isTrue);
+      expect(connection.syncingRules, isTrue);
+      app.delay!.complete();
+      await syncing;
+      expect(connection.syncingRules, isFalse);
+
+      app.delay = Completer<void>();
+      final clearingTraffic = connection.clearTraffic();
+      expect(connection.working, isTrue);
+      expect(connection.syncingRules, isFalse);
+      app.delay!.complete();
+      await clearingTraffic;
+      expect(connection.working, isFalse);
+    },
+  );
+
   test('rapid edits converge to the latest acknowledged version', () async {
     final app = await startApp('a');
     await connection.connect(address);
@@ -362,7 +394,7 @@ void main() {
   });
 
   test(
-    'reconnecting an app restores acknowledged rules and deduplicates traffic',
+    'reconnecting an app preserves its in-memory rules and deduplicates traffic',
     () async {
       final app = await startApp('a');
       await connection.connect(address);
@@ -371,9 +403,8 @@ void main() {
       await waitUntil(() => connection.traffic.length == 1);
       app.agent.stop();
       await waitUntil(() => !connection.ready);
-      app.rules = [];
       app.agent.start();
-      await waitUntil(() => connection.ready && app.rules.isNotEmpty);
+      await waitUntil(() => connection.ready);
       expect((app.rules.single as Map)['body'], {'name': 'saved'});
       app.emit('/two');
       await waitUntil(() => connection.traffic.length == 2);
@@ -391,6 +422,102 @@ void main() {
     connection.disconnect();
     await connection.connect(address);
     expect(connection.rules.single['body'], {'name': 'saved'});
+  });
+
+  test('cold start leaves rules empty until explicit browser sync', () async {
+    final app = await startApp('a');
+    await connection.connect(address);
+    final store = MemoryRuleStore();
+    final book = RuleBook(connection, store: store);
+    addTearDown(book.dispose);
+    await book.replaceAll(RuleBook.parseFile(ruleJson('saved')));
+    expect(app.rules, isEmpty);
+    await book.push();
+    expect(book.autoSyncEnabled, isTrue);
+    app.agent.stop();
+    await waitUntil(() => !connection.ready);
+    final replacement = await startApp('a');
+    await waitUntil(() => connection.ready);
+    expect(replacement.rules, isEmpty);
+    expect(book.rules.single['body'], {'name': 'saved'});
+    expect(book.autoSyncEnabled, isFalse);
+    await book.replaceAll(RuleBook.parseFile(ruleJson('edited')));
+    expect(replacement.rules, isEmpty);
+    await book.push();
+    await book.replaceAll(RuleBook.parseFile(ruleJson('automatic')));
+    expect((replacement.rules.single as Map)['body'], {'name': 'automatic'});
+  });
+
+  test('offline edits resume only for the approved app session', () async {
+    final app = await startApp('a');
+    await connection.connect(address);
+    final book = RuleBook(connection, store: MemoryRuleStore());
+    addTearDown(book.dispose);
+    await book.replaceAll(RuleBook.parseFile(ruleJson('saved')));
+    await book.push();
+    app.agent.stop();
+    await waitUntil(() => !connection.ready);
+    await book.replaceAll(RuleBook.parseFile(ruleJson('offline')));
+    app.agent.start();
+    await waitUntil(
+      () =>
+          connection.ready &&
+          (app.rules.single as Map)['body']['name'] == 'offline',
+    );
+    expect(book.autoSyncEnabled, isTrue);
+    app.agent.stop();
+    await waitUntil(() => !connection.ready);
+    await book.replaceAll(RuleBook.parseFile(ruleJson('next-session')));
+    final replacement = await startApp('a');
+    await waitUntil(() => connection.ready);
+    expect(replacement.rules, isEmpty);
+    expect(book.autoSyncEnabled, isFalse);
+  });
+
+  test(
+    'interrupted automatic edits retry on the same session reconnect',
+    () async {
+      final app = await startApp('a');
+      await connection.connect(address);
+      final book = RuleBook(connection, store: MemoryRuleStore());
+      addTearDown(book.dispose);
+      await book.replaceAll(RuleBook.parseFile(ruleJson('saved')));
+      await book.push();
+      app.delay = Completer<void>();
+      final edit = book.replaceAll(RuleBook.parseFile(ruleJson('interrupted')));
+      final failed = expectLater(edit, throwsStateError);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      app.agent.stop();
+      await failed;
+      expect(book.syncError, isNotNull);
+      app.delay!.complete();
+      app.delay = null;
+      app.agent.start();
+      await waitUntil(
+        () =>
+            connection.ready &&
+            (app.rules.single as Map)['body']['name'] == 'interrupted',
+      );
+      expect(book.autoSyncEnabled, isTrue);
+      expect(book.syncError, isNull);
+    },
+  );
+
+  test('a failed initial sync never enables automatic sync', () async {
+    final app = await startApp('a');
+    await connection.connect(address);
+    final book = RuleBook(connection, store: MemoryRuleStore());
+    addTearDown(book.dispose);
+    await book.replaceAll(RuleBook.parseFile(ruleJson('saved')));
+    app.reject = true;
+    await expectLater(book.push(), throwsStateError);
+    expect(book.autoSyncEnabled, isFalse);
+    app.reject = false;
+    await book.replaceAll(RuleBook.parseFile(ruleJson('local-only')));
+    expect(app.rules, isEmpty);
+    await book.push();
+    expect(book.autoSyncEnabled, isTrue);
+    expect((app.rules.single as Map)['body'], {'name': 'local-only'});
   });
 
   test('a restarted app resets the traffic revision namespace', () async {
@@ -472,6 +599,7 @@ void main() {
       app.agent.stop();
       await failed;
       expect(connection.working, isFalse);
+      expect(connection.syncingRules, isFalse);
       app.delay!.complete();
       app.delay = null;
       app.agent.start();

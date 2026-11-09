@@ -13,17 +13,20 @@ class MockTarget {
     this.name, {
     this.supportsCapture = true,
     this.online = true,
+    this.sessionId,
   });
   final String id;
   final String name;
   final bool supportsCapture;
   final bool online;
+  final String? sessionId;
 }
 
 /// The browser connects to the same local endpoint as the app.
 class MockConnection extends ChangeNotifier {
   RelayPeer? _peer;
   bool _working = false;
+  bool _syncingRules = false;
   bool _disposed = false;
   int _generation = 0;
   String _status = '未连接 Relay';
@@ -37,6 +40,7 @@ class MockConnection extends ChangeNotifier {
   int _editVersion = 0;
   int _epoch = -1;
   String? _session;
+  final _appSessions = <String, String>{};
   Future<void>? _draining;
   bool _autoReconnect = false;
   Timer? _retry;
@@ -53,6 +57,7 @@ class MockConnection extends ChangeNotifier {
 
   bool get connected => _peer != null;
   bool get working => _working;
+  bool get syncingRules => _syncingRules;
   bool get ready =>
       connected &&
       _selectedId != null &&
@@ -61,6 +66,7 @@ class MockConnection extends ChangeNotifier {
   String get status => _status;
   List<MockTarget> get targets => _targets;
   String? get selectedId => _selectedId;
+  String? get appSession => _appSessions[_selectedId];
   int? get remoteRuleCount => _remoteRuleCount;
   bool get captureAvailable => _selectedId != null;
   bool get captureLive => _captureLive;
@@ -150,10 +156,14 @@ class MockConnection extends ChangeNotifier {
       final wasOnline = _targets.any((t) => t.id == _selectedId && t.online);
       _targets = (event['devices'] as List).map((value) {
         final d = value as Map;
+        final id = d['id'] as String;
+        final session = d['sessionId'] as String?;
+        if (session != null) _appSessions[id] = session;
         return MockTarget(
-          d['id'] as String,
+          id,
           d['name'] as String,
           online: d['online'] == true,
+          sessionId: session,
         );
       }).toList();
       if (_selectedId != null &&
@@ -198,6 +208,7 @@ class MockConnection extends ChangeNotifier {
       stopRecording();
     }
     _session = data['sessionId'] as String;
+    if (_selectedId != null) _appSessions[_selectedId!] = _session!;
     _epoch = data['epoch'] as int;
     final incoming = (data['entries'] as List).cast<Map<String, dynamic>>();
     if (recording) {
@@ -236,6 +247,7 @@ class MockConnection extends ChangeNotifier {
     }
     return peer.request('command', {
       'deviceId': _selectedId,
+      'sessionId': appSession,
       'method': method,
       'args': args,
     });
@@ -251,7 +263,7 @@ class MockConnection extends ChangeNotifier {
     final previousId = _selectedId;
     _selectedId = id;
     _working = true;
-    _status = '正在读取设备的规则和请求…';
+    _status = '正在读取设备状态…';
     _notify();
     try {
       final state = await _command('getState');
@@ -297,14 +309,24 @@ class MockConnection extends ChangeNotifier {
 
   Future<void> _flushRules() async {
     final generation = _generation;
+    final deviceId = _selectedId;
+    final session = appSession;
     _working = true;
+    _syncingRules = true;
     _notify();
     try {
       int version;
       do {
+        if (_selectedId != deviceId || appSession != session) {
+          throw StateError('App 会话已变化，请重新同步到设备');
+        }
         version = _editVersion;
         final state = await _command('replaceRules', {'rules': _rules});
-        if (generation != _generation) return;
+        if (generation != _generation ||
+            _selectedId != deviceId ||
+            appSession != session) {
+          throw StateError('App 会话或 Relay 连接已变化，请重新同步到设备');
+        }
         _remoteRuleCount = (state['rules'] as List).length;
         _status = '设备已确认 $_remoteRuleCount 条规则，从下一个请求开始生效';
       } while (version != _editVersion);
@@ -314,6 +336,7 @@ class MockConnection extends ChangeNotifier {
     } finally {
       if (generation == _generation) {
         _working = false;
+        _syncingRules = false;
         _notify();
       }
     }
@@ -411,6 +434,7 @@ class MockConnection extends ChangeNotifier {
     _peer?.close();
     _peer = null;
     _working = false;
+    _syncingRules = false;
     _targets = [];
     _selectedId = null;
     _remoteRuleCount = null;

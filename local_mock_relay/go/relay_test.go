@@ -33,6 +33,61 @@ func read(t *testing.T, c *websocket.Conn) map[string]any {
 	return m
 }
 
+func TestRelayReconnectUsesAppRules(t *testing.T) {
+	for _, session := range []string{"s1", "s2"} {
+		t.Run(session, func(t *testing.T) {
+			r := NewRelay(t.TempDir(), time.Second)
+			srv := httptest.NewServer(r.Handler())
+			defer srv.Close()
+			hello := func(c *websocket.Conn, session string, rules []any) {
+				t.Helper()
+				_ = c.WriteJSON(map[string]any{"id": "hello", "method": "hello", "args": map[string]any{
+					"protocolVersion": 1, "deviceId": "d1", "deviceName": "phone", "sessionId": session,
+					"state": map[string]any{"rules": rules},
+				}})
+				if got := read(t, c); got["id"] != "hello" || got["error"] != nil {
+					t.Fatalf("hello: %v", got)
+				}
+			}
+			app := dial(t, srv, "app")
+			hello(app, "s1", []any{map[string]any{"id": "old"}})
+			con := dial(t, srv, "console")
+			_ = con.WriteJSON(map[string]any{"id": "1", "method": "hello", "args": map[string]any{"protocolVersion": 1}})
+			read(t, con)
+			read(t, con)
+			app.Close()
+			read(t, con) // offline
+			replacement := dial(t, srv, "app")
+			hello(replacement, session, []any{})
+			if got := read(t, con); got["devices"].([]any)[0].(map[string]any)["online"] != true {
+				t.Fatalf("reconnected: %v", got)
+			}
+			_ = con.WriteJSON(map[string]any{"id": "2", "method": "command", "args": map[string]any{
+				"deviceId": "d1", "method": "getState", "sessionId": session,
+			}})
+			// No replaceRules may precede this explicit console command.
+			cmd := read(t, replacement)
+			if cmd["method"] != "getState" {
+				t.Fatalf("unexpected automatic command: %v", cmd)
+			}
+			_ = replacement.WriteJSON(map[string]any{"id": cmd["id"], "result": map[string]any{"rules": []any{}}})
+			if got := read(t, con); len(got["rules"].([]any)) != 0 {
+				t.Fatalf("old rules restored: %v", got)
+			}
+			read(t, con)
+			if session == "s2" {
+				_ = con.WriteJSON(map[string]any{"id": "3", "method": "command", "args": map[string]any{
+					"deviceId": "d1", "method": "replaceRules", "sessionId": "s1",
+					"args": map[string]any{"rules": []any{map[string]any{"id": "stale"}}},
+				}})
+				if got := read(t, con); got["id"] != "3" || got["error"] == nil {
+					t.Fatalf("stale session command accepted: %v", got)
+				}
+			}
+		})
+	}
+}
+
 func TestRelayFlowAndDiag(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, "index.html"), []byte("hi"), 0o644)

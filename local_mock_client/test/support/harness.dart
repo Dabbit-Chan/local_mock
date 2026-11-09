@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:local_mock_client/main.dart';
 import 'package:local_mock_client/src/capture_session_store.dart';
 import 'package:local_mock_client/src/mock_connection.dart';
+import 'package:local_mock_client/src/rule_store.dart';
 import 'package:local_mock_client/src/rule_file_transfer.dart';
 import 'package:local_mock_core/local_mock_core.dart';
 import 'package:re_editor/re_editor.dart';
@@ -89,6 +90,32 @@ class MemoryStore extends CaptureSessionStore {
       exported = session;
 }
 
+class MemoryRuleStore extends RuleStore {
+  final contents = <String, SavedRules>{};
+  Object? saveFailure;
+
+  @override
+  SavedRules? load(String deviceId) {
+    final saved = contents[deviceId];
+    if (saved == null) return null;
+    return SavedRules(
+      rules: (jsonDecode(jsonEncode(saved.rules)) as List)
+          .cast<Map<String, dynamic>>(),
+      syncedSession: saved.syncedSession,
+    )..pending = saved.pending;
+  }
+
+  @override
+  void save(String deviceId, SavedRules value) {
+    if (saveFailure != null) throw saveFailure!;
+    contents[deviceId] = SavedRules(
+      rules: (jsonDecode(jsonEncode(value.rules)) as List)
+          .cast<Map<String, dynamic>>(),
+      syncedSession: value.syncedSession,
+    )..pending = value.pending;
+  }
+}
+
 class RuleFiles extends RuleFileTransfer {
   String? imported;
   String? exported;
@@ -125,6 +152,8 @@ class FakeConnection extends MockConnection {
   List<Map<String, dynamic>>? applied;
   int pushes = 0;
   int revision = 0;
+  String? session = 'session-1';
+  String selected = 'phone';
   String? recordingAs;
   bool _recording = false;
   TrafficSession? draft;
@@ -147,9 +176,11 @@ class FakeConnection extends MockConnection {
   List<MockTarget> get targets => isConnected ? devices : const [];
   @override
   String? get selectedId =>
-      isConnected && devices.any((d) => d.id == 'phone' && d.online)
-      ? 'phone'
+      isConnected && devices.any((d) => d.id == selected && d.online)
+      ? selected
       : null;
+  @override
+  String? get appSession => session;
   @override
   String get status => isConnected ? '已就绪' : '正在连接 Relay…';
   @override
@@ -172,7 +203,10 @@ class FakeConnection extends MockConnection {
   TrafficSession? get pendingRecording => draft;
 
   @override
-  Future<void> selectTarget(String id) async {}
+  Future<void> selectTarget(String id) async {
+    selected = id;
+    notifyListeners();
+  }
 
   @override
   Future<void> updateRules(String text) async {
@@ -226,6 +260,7 @@ Future<void> pumpApp(
   MockConnection? connection,
   MemoryStore? store,
   RuleFiles? files,
+  MemoryRuleStore? ruleStore,
   String location = '/',
   ThemeMode themeMode = ThemeMode.light,
 }) async {
@@ -234,10 +269,18 @@ Future<void> pumpApp(
   addTearDown(tester.view.reset);
   final conn = connection ?? FakeConnection();
   if (connection == null) addTearDown(conn.dispose);
+  final rules = ruleStore ?? MemoryRuleStore();
+  if (ruleStore == null && conn.selectedId != null) {
+    rules.save(
+      conn.selectedId!,
+      SavedRules(rules: conn.rules, syncedSession: conn.appSession),
+    );
+  }
   await tester.pumpWidget(
     LocalMockApp(
       connection: conn,
       store: store ?? MemoryStore(),
+      ruleStore: rules,
       ruleFiles: files ?? RuleFiles(),
       initialLocation: location,
       themeMode: themeMode,

@@ -14,6 +14,7 @@ import 'preferences.dart';
 import 'recording_library.dart';
 import 'rule_book.dart';
 import 'rule_file_transfer.dart';
+import 'rule_store.dart';
 import 'ui/primitives.dart';
 import 'ui/theme.dart';
 
@@ -47,7 +48,8 @@ class AppServices {
     required this.ruleFiles,
     required CaptureSessionStore store,
     ThemeController? theme,
-  }) : rules = RuleBook(connection),
+    RuleStore ruleStore = const RuleStore(),
+  }) : rules = RuleBook(connection, store: ruleStore),
        library = RecordingLibrary(connection: connection, store: store),
        theme = theme ?? ThemeController();
 
@@ -89,6 +91,7 @@ class LocalMockApp extends StatefulWidget {
     this.connection,
     this.ruleFiles = const RuleFileTransfer(),
     this.store = const CaptureSessionStore(),
+    this.ruleStore = const RuleStore(),
     this.initialLocation = Routes.home,
     this.themeMode,
   });
@@ -97,6 +100,7 @@ class LocalMockApp extends StatefulWidget {
   final MockConnection? connection;
   final RuleFileTransfer ruleFiles;
   final CaptureSessionStore store;
+  final RuleStore ruleStore;
   final String initialLocation;
 
   /// Fixed theme (tests); null uses the persisted preference.
@@ -112,6 +116,7 @@ class _LocalMockAppState extends State<LocalMockApp> {
     connection: _connection,
     ruleFiles: widget.ruleFiles,
     store: widget.store,
+    ruleStore: widget.ruleStore,
   );
   final _messenger = GlobalKey<ScaffoldMessengerState>();
   StreamSubscription<Object>? _savedSub;

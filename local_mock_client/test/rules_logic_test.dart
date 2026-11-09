@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:local_mock_client/src/format.dart';
 import 'package:local_mock_client/src/rule_book.dart';
+import 'package:local_mock_client/src/rule_store.dart';
 import 'package:local_mock_client/src/rule_drafts.dart';
 import 'package:local_mock_core/local_mock_core.dart';
 
@@ -64,17 +65,24 @@ void main() {
 
     setUp(() {
       connection = FakeConnection(rules: [a, b]);
-      book = RuleBook(connection);
+      final store = MemoryRuleStore()
+        ..save(
+          'phone',
+          SavedRules(rules: [a, b], syncedSession: connection.appSession),
+        );
+      book = RuleBook(connection, store: store);
     });
     tearDown(() {
       book.dispose();
       connection.dispose();
     });
 
-    test('starts from the device rules and follows device replacements', () {
+    test('browser rules survive device replacements and empty app state', () {
       expect(book.rules.map((r) => r['id']), ['a', 'b']);
       connection.deviceReplacesRules([b]);
-      expect(book.rules.map((r) => r['id']), ['b']);
+      expect(book.rules.map((r) => r['id']), ['a', 'b']);
+      connection.deviceReplacesRules([]);
+      expect(book.rules.map((r) => r['id']), ['a', 'b']);
     });
 
     test('move, insert and remove push the new order', () async {
@@ -87,14 +95,14 @@ void main() {
       expect(connection.applied!.map((r) => r['id']), ['b', 'a']);
     });
 
-    test('replacing a rule that is no longer listed fails', () {
+    test('replacing a rule that is no longer listed fails', () async {
       final stale = book.rules.first;
-      connection.deviceReplacesRules([a, b]);
+      await book.replaceAll([a, b]);
       expect(
         () => book.replace(stale, {...a, 'path': '/z'}),
         throwsA(isA<StateError>()),
       );
-      expect(connection.applied, isNull);
+      expect(connection.pushes, 1);
     });
 
     test('a recording yields at most one group', () async {
