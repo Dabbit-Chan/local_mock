@@ -69,6 +69,7 @@ class CodePanel extends StatefulWidget {
     this.onSave,
     this.onChanged,
     this.trailing,
+    this.finalAction,
     this.formatAction = true,
     this.wordWrap = false,
     this.showGutter = true,
@@ -87,6 +88,9 @@ class CodePanel extends StatefulWidget {
 
   /// Extra widgets in the header, left of the built-in actions.
   final Widget? trailing;
+
+  /// Optional action placed at the far right, after search and copy.
+  final Widget? finalAction;
   final bool formatAction;
   final bool wordWrap;
   final bool showGutter;
@@ -156,7 +160,10 @@ class _CodePanelState extends State<CodePanel> {
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
-    final header = widget.label == null && widget.trailing == null
+    final header =
+        widget.label == null &&
+            widget.trailing == null &&
+            widget.finalAction == null
         ? null
         : SizedBox(
             height: 32,
@@ -193,6 +200,7 @@ class _CodePanelState extends State<CodePanel> {
                   onPressed: () =>
                       copyText(context, widget.controller.text, '内容'),
                 ),
+                ?widget.finalAction,
               ],
             ),
           );

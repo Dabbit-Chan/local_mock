@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -398,14 +399,112 @@ void main() {
       await openRequest(tester, '/api/order');
       expect(find.text('请求详情'), findsOneWidget);
       expect(find.text('请求体'), findsOneWidget);
+      expect(find.text('响应体'), findsOneWidget);
+      expect(find.text('Query 参数'), findsNothing);
+      expect(find.text('请求头'), findsNothing);
       expect(find.text('https://api.test/api/order'), findsOneWidget);
 
       await openRequest(tester, '/api/feed');
       expect(find.text('Page'), findsOneWidget);
       expect(find.text('2'), findsWidgets);
+      expect(find.text('请求体'), findsNothing);
+      expect(find.text('响应体'), findsNothing);
+      expect(find.text('请求头'), findsNothing);
     });
 
-    testWidgets('detail shows request headers and copies a curl command', (
+    testWidgets('detail sections collapse and resize by dragging splitters', (
+      tester,
+    ) async {
+      await openDevice(
+        tester,
+        traffic: [
+          trafficEntry(
+            1,
+            '/api/order?item=1',
+            method: 'POST',
+            request: '{"item":1}',
+            response: '{"ok":true}',
+            requestHeaders: {
+              'Content-Type': ['application/json'],
+            },
+          ),
+        ],
+      );
+      await openRequest(tester, '/api/order');
+
+      for (var index = 0; index < 4; index++) {
+        final actions = tester
+            .widgetList<ToolButton>(
+              find.descendant(
+                of: find.byKey(Key('detail-pane-$index')),
+                matching: find.byType(ToolButton),
+              ),
+            )
+            .toList();
+        expect(actions.last.icon, Icons.unfold_less);
+        expect(actions[actions.length - 2].icon, Icons.copy_outlined);
+      }
+
+      final queryPane = find.byKey(const Key('detail-pane-0'));
+      final headersPane = find.byKey(const Key('detail-pane-1'));
+      final responsePane = find.byKey(const Key('detail-pane-3'));
+      final originalHeight = tester.getSize(queryPane).height;
+      final originalHeadersHeight = tester.getSize(headersPane).height;
+      final originalResponseHeight = tester.getSize(responsePane).height;
+      final splitter = find.byKey(const Key('detail-splitter-0'));
+      // The whole divider is draggable, including near its left edge.
+      final start = tester.getTopLeft(splitter) + const Offset(8, 2);
+      final drag = await tester.startGesture(
+        start,
+        kind: PointerDeviceKind.mouse,
+      );
+      await drag.moveBy(const Offset(0, 1));
+      await tester.pump();
+      expect(
+        tester.getSize(queryPane).height,
+        closeTo(originalHeight + 1, 0.01),
+      );
+
+      // Several pointer events before layout must accumulate without lag.
+      await drag.moveBy(const Offset(0, 8));
+      await drag.moveBy(const Offset(0, 9));
+      await tester.pump();
+      expect(
+        tester.getSize(queryPane).height,
+        closeTo(originalHeight + 18, 0.01),
+      );
+      expect(
+        tester.getSize(headersPane).height,
+        closeTo(originalHeadersHeight - 18, 0.01),
+      );
+      expect(
+        tester.getSize(responsePane).height,
+        closeTo(originalResponseHeight, 0.01),
+      );
+
+      await drag.moveTo(start + const Offset(0, 2000));
+      await tester.pump();
+      expect(tester.getSize(headersPane).height, closeTo(96, 0.01));
+      // Returning from a size limit still follows the original pointer anchor.
+      await drag.moveTo(start + const Offset(0, 20));
+      await tester.pump();
+      expect(
+        tester.getSize(queryPane).height,
+        closeTo(originalHeight + 20, 0.01),
+      );
+      await drag.up();
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('折叠Query 参数'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('展开Query 参数'), findsOneWidget);
+      await tester.tap(find.byTooltip('展开Query 参数'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('折叠Query 参数'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('detail copies query parameters, headers and a curl command', (
       tester,
     ) async {
       final clipboard = <String>[];
@@ -433,6 +532,7 @@ void main() {
             '/api/order',
             method: 'POST',
             request: '{"sku":"A1"}',
+            query: 'tag=a&tag=b&q=%E4%B8%AD%E6%96%87',
             requestHeaders: {
               'Authorization': ['Bearer token'],
               'Content-Type': ['application/json'],
@@ -454,6 +554,20 @@ void main() {
       expect(clipboard.single, contains("-H 'Authorization: Bearer token'"));
       expect(clipboard.single, contains('--data-raw'));
       expect(find.text('已复制 cURL 命令'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('复制全部 Query 参数'));
+      await tester.pumpAndSettle();
+      expect(Uri(query: clipboard.last).queryParametersAll, {
+        'tag': ['a', 'b'],
+        'q': ['中文'],
+      });
+
+      await tester.tap(find.byTooltip('复制全部请求头'));
+      await tester.pumpAndSettle();
+      expect(
+        clipboard.last,
+        'Authorization: Bearer token\nContent-Type: application/json',
+      );
     });
 
     testWidgets('a request becomes a pre-filled rule draft', (tester) async {

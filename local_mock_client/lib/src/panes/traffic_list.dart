@@ -34,6 +34,7 @@ class TrafficList extends StatefulWidget {
 
 class _TrafficListState extends State<TrafficList> {
   final _query = TextEditingController();
+  final _scroll = ScrollController();
   bool _onlyMocked = false;
   bool _onlyFailed = false;
 
@@ -46,6 +47,7 @@ class _TrafficListState extends State<TrafficList> {
   @override
   void dispose() {
     _query.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -153,7 +155,10 @@ class _TrafficListState extends State<TrafficList> {
                       : null,
                 )
               : Scrollbar(
+                  controller: _scroll,
                   child: ListView.builder(
+                    controller: _scroll,
+                    primary: false,
                     itemCount: visible.length,
                     itemExtent: 40,
                     itemBuilder: (context, index) {
