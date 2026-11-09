@@ -1,6 +1,7 @@
 /// Native-only, HTTP-client-agnostic core: rules, matching, traffic capture,
-/// and the VM Service relay bridge. Adapters (local_mock_dio,
-/// local_mock_http) call [LocalMock.match] and [LocalMock.beginTraffic].
+/// and the VM Service bridge that applies console commands inside the app.
+/// Adapters (local_mock_dio, local_mock_http) call [LocalMock.match] and
+/// [LocalMock.beginTraffic].
 library;
 
 export 'src/local_mock.dart' show LocalMock;

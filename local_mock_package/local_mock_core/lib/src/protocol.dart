@@ -1,4 +1,4 @@
-/// Shared names and wire version for the desktop and app.
+/// VM Service extension names and wire version used inside the app.
 abstract final class LocalMockProtocol {
   /// v2: adds traffic capture (`getTraffic` / `clearTraffic`).
   static const version = 2;

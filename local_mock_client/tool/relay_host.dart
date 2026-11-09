@@ -27,6 +27,7 @@ class _Device {
 
 /// In-memory relay. Each app has its own acknowledged rules and bounded
 /// traffic history. Disconnecting a console does not change app rules.
+/// The Go implementation in `local_mock_relay/go` speaks the same protocol.
 class LocalMockRelay {
   LocalMockRelay({Directory? webDirectory})
     : webDirectory = webDirectory ?? Directory('build/web');

@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-/// Separate from the legacy VM Service protocol.
+/// Separate from the VM Service extension protocol used inside the app.
 const relayProtocolVersion = 1;
 
 Uri relayUri(String address, String role) {
@@ -136,8 +136,10 @@ class RelayPeer {
   }
 }
 
-/// App-initiated connection with automatic reconnect. A session ID identifies
-/// one live app/isolate, while deviceId can remain stable across app restarts.
+/// App-initiated Relay connection (`/ws/app`) with automatic reconnect. This
+/// is the transport to the Relay; the app-local VM Service channel is separate.
+/// A session ID identifies one live app/isolate, while deviceId can remain
+/// stable across app restarts.
 class LocalMockAgent {
   LocalMockAgent({
     required this.serverUrl,

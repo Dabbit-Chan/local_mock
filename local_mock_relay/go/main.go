@@ -4,6 +4,7 @@
 //
 // Environment:
 //
+//	LOCAL_MOCK_PORT           listen port (default 9090; the [port] argument wins)
 //	LOCAL_MOCK_HOST           listen address (default 127.0.0.1; use 0.0.0.0 in containers)
 //	LOCAL_MOCK_WEB_DIR        console files (default build/web)
 //	LOCAL_MOCK_PING_SECONDS   WebSocket ping interval (default 5)

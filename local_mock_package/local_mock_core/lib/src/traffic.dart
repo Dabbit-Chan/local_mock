@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// One request/response pair recorded by an adapter, shown in the desktop
+/// One request/response pair recorded by an adapter, shown in the web console
 /// capture view and convertible into a mock rule.
 final class TrafficEntry {
   TrafficEntry({
@@ -130,7 +130,7 @@ final class TrafficRecorder {
       if (entry.revision > sinceRevision) entry,
   ];
 
-  /// Drops stored entries; the revision counter keeps increasing so desktop
+  /// Drops stored entries; the revision counter keeps increasing so console
   /// cursors stay valid after a clear.
   void clear() => _entries.clear();
 

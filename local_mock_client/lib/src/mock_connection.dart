@@ -22,7 +22,7 @@ class MockTarget {
   final String? sessionId;
 }
 
-/// The browser connects to the same local endpoint as the app.
+/// The browser connects to the same Relay as the app.
 class MockConnection extends ChangeNotifier {
   RelayPeer? _peer;
   bool _working = false;

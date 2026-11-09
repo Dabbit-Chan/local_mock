@@ -218,7 +218,7 @@ class _RelayOffline extends StatelessWidget {
     title: '正在连接 Relay',
     body:
         '${connection.status}\n\n'
-        '页面每 2 秒自动重试。控制台必须由 tool/relay_host.dart 托管'
+        '页面每 2 秒自动重试。控制台必须由 Relay 托管'
         '（例如 http://127.0.0.1:9090/）才能连上 Relay；'
         '通过 flutter run 打开的页面只能预览界面，会一直重试。',
   );

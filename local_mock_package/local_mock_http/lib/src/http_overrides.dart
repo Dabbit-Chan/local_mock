@@ -8,7 +8,7 @@ import 'package:local_mock_core/local_mock_core.dart';
 /// Wraps every `HttpClient` created through `dart:io` so matching requests
 /// are answered locally. Unmatched requests use [previous] (or the default
 /// client) unchanged. Both mocked and pass-through requests are recorded
-/// for the desktop capture view.
+/// for the web console capture view.
 final class LocalMockHttpOverrides extends HttpOverrides {
   LocalMockHttpOverrides([this.previous]);
 

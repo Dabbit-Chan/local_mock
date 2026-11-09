@@ -12,9 +12,11 @@ import 'protocol.dart';
 // traffic cannot be mocked, captured or recursively reported by our adapter.
 class _ControlOverrides extends HttpOverrides {}
 
-/// Connects to the VM Service inside this device. The existing outbound Relay
-/// connection carries commands/results, so neither testers nor Relay need a
-/// Flutter SDK, USB connection, inbound device port or VM Service credentials.
+/// Connects to the VM Service inside this device over a local WebSocket. This
+/// is the app-local control channel; it never connects to the Relay. The
+/// separate outbound Relay connection carries commands/results, so neither
+/// testers nor Relay need a Flutter SDK, USB connection, inbound device port or
+/// VM Service credentials.
 class VmServiceBridge {
   VmServiceBridge({required this.onTraffic, required this.onDisconnected});
 

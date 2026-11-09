@@ -16,7 +16,7 @@ import 'vm_service_bridge_io.dart';
 /// Business apps normally use an adapter (local_mock_dio / local_mock_http)
 /// instead of calling this directly. Custom adapters call [ensureInitialized]
 /// once, [match] for every request, and [beginTraffic] to feed the capture
-/// view shown by the desktop app.
+/// view shown by the web console.
 abstract final class LocalMock {
   static final _registry = MockRegistry();
   static final _traffic = TrafficRecorder(
@@ -36,12 +36,15 @@ abstract final class LocalMock {
     'supportsRecordingMocks': true,
   };
 
-  /// Enabled in native Debug and Profile only; disabled in Release.
+  /// Enabled in native Debug and Profile only; disabled in Release, where
+  /// connect/intercept/capture are all no-ops. Use Profile for near-production
+  /// verification.
   static const enabled = !kReleaseMode;
 
-  /// Starts an outbound relay connection. Returns immediately; unavailable
-  /// servers are retried in the background and never block business requests.
-  /// Use a unique, stable deviceId for each app installation/isolate.
+  /// Sets up the outbound relay connection and the local VM Service bridge.
+  /// Returns immediately; unavailable servers are retried in the background
+  /// and never block business requests. Use a unique, stable deviceId for each
+  /// app installation/isolate.
   static bool connect({
     required String serverUrl,
     required String deviceId,

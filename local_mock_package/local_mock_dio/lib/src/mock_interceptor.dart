@@ -51,7 +51,7 @@ Map<String, List<String>>? _describeHeaders(Map<String, dynamic> headers) {
 }
 
 /// Serves matching requests from local_mock rules; others go to the network.
-/// Every request that passes through is recorded for the desktop capture
+/// Every request that passes through is recorded for the web console capture
 /// view, whether it was mocked or answered by the real backend.
 ///
 /// Add it after interceptors that change the request URL / method. Prefer

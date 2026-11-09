@@ -1,12 +1,14 @@
 # local_mock_transport
 
-App、Relay 和 Web 控制台之间的 WebSocket 通信层，是纯 Dart 实现，不依赖 Flutter。它由 `local_mock_core` 引入，业务 App 不需要直接使用。
+App、Relay 和 Web 控制台之间的 WebSocket 通信层，是纯 Dart 实现，不依赖 Flutter。`local_mock_core` 和 Web 控制台都直接使用它；业务 App 不需要直接使用。Go 版 Relay 按同一协议独立实现。
 
 ## 技术原理
 
 - **消息模型**：所有消息都是 JSON 文本，分为请求、应答和事件三种。请求带 `id`，可以对应到它的应答，并设有超时。
-- **两个入口**：App 连接 `/ws/app`，控制台连接 `/ws/console`，连接后先握手核对协议版本。
+- **两个入口**：App 的 `LocalMockAgent` 连接 `/ws/app`，控制台连接 `/ws/console`，连接后先握手核对协议版本。
 - **命令转发**：控制台发出的命令（读取状态、替换规则、清空等）由 Relay 转发给对应的 App，App 的应答再原路返回。
 - **断线重连**：App 断线后自动重连，重连时补发请求缓冲，并用递增的序号去重；会话 ID 变化表示 App 已经重启。
+
+App 内部的 `VmServiceBridge` 到本机 VM Service 是另一条 WebSocket 通道，不属于本协议，也不经过 Relay。
 
 协议本身不做鉴权，传输是否加密取决于是否使用 `wss`。

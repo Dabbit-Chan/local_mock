@@ -1,8 +1,8 @@
 /// Builds a cURL command from one captured traffic entry.
 ///
 /// The result is POSIX-shell safe: every URL, header and body is wrapped in
-/// single quotes. Headers curl computes itself (`Content-Length`) are skipped,
-/// because a stale value would break the replayed request.
+/// single quotes. Headers that curl computes itself (`Content-Length`) are
+/// skipped, because a stale value would break the replayed request.
 library;
 
 /// Placeholder bodies produced by the adapters (binary payloads, FormData…)
