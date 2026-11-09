@@ -200,6 +200,31 @@ final class _MockHttpClient implements HttpClient {
   set keyLog(Function(String line)? callback) => _inner.keyLog = callback;
 }
 
+/// Snapshot of request headers for the capture view. Values keep their order
+/// and the case written by the caller, matching what the app actually sent.
+/// dart:io keeps cookies outside the header map until the request is written,
+/// so they are folded in here as the app's `Cookie` header would be.
+Map<String, List<String>>? _captureHeaders(
+  HttpHeaders headers, [
+  List<Cookie> cookies = const [],
+]) {
+  final captured = <String, List<String>>{};
+  headers.forEach((name, values) {
+    final items = [
+      for (final value in values)
+        if (value.isNotEmpty) value,
+    ];
+    if (items.isNotEmpty) captured[name] = items;
+  });
+  if (cookies.isNotEmpty &&
+      !captured.keys.any((name) => name.toLowerCase() == 'cookie')) {
+    captured['Cookie'] = [
+      cookies.map((cookie) => '${cookie.name}=${cookie.value}').join('; '),
+    ];
+  }
+  return captured.isEmpty ? null : captured;
+}
+
 final class _MockRequest implements HttpClientRequest {
   _MockRequest(
     this.method,
@@ -286,6 +311,7 @@ final class _MockRequest implements HttpClientRequest {
   Future<HttpClientResponse> _respond() async {
     final bytes = _body.takeBytes();
     final requestBody = utf8.decode(bytes, allowMalformed: true);
+    _traffic?.requestHeaders = _captureHeaders(headers, cookies);
     final rule = LocalMock.match(method, uri, requestBody: requestBody);
     if (rule != null && !rule.isPatch) {
       _mocked = true;
@@ -644,8 +670,10 @@ final class _RecordingHttpClientRequest implements HttpClientRequest {
   Future<HttpClientResponse> get done =>
       _inner.done.then(_wrap, onError: _fail);
   @override
-  Future<HttpClientResponse> close() =>
-      _inner.close().then(_wrap, onError: _fail);
+  Future<HttpClientResponse> close() {
+    _traffic.requestHeaders = _captureHeaders(_inner.headers, _inner.cookies);
+    return _inner.close().then(_wrap, onError: _fail);
+  }
 
   @override
   void abort([Object? exception, StackTrace? stackTrace]) {

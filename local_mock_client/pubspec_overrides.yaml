@@ -1,2 +1,10 @@
 dependency_overrides:
   isolate_manager: 6.3.2
+  # Local workspace resolution, so the console picks up in-repo package changes
+  # (e.g. new captured fields) without publishing first.
+  local_mock_core:
+    path: ../local_mock_package/local_mock_core
+  local_mock_transport:
+    path: ../local_mock_package/local_mock_transport
+  local_mock_http:
+    path: ../local_mock_package/local_mock_http

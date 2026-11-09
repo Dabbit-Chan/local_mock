@@ -13,6 +13,7 @@ final class TrafficEntry {
     required this.uri,
     required this.path,
     this.host,
+    this.requestHeaders,
     this.requestBody,
     this.statusCode,
     this.contentType,
@@ -29,6 +30,7 @@ final class TrafficEntry {
     uri: json['uri'] as String? ?? '',
     host: json['host'] as String?,
     path: json['path'] as String? ?? '',
+    requestHeaders: _readHeaders(json['requestHeaders']),
     requestBody: json['requestBody'] as String?,
     statusCode: json['statusCode'] as int?,
     contentType: json['contentType'] as String?,
@@ -53,6 +55,11 @@ final class TrafficEntry {
   final String? host;
   final String path;
 
+  /// Request headers as seen by the adapter, keyed by name. Names keep the
+  /// case the app sent; each name keeps all its values. Null when the adapter
+  /// could not read them (older app builds never send this field).
+  final Map<String, List<String>>? requestHeaders;
+
   /// Best-effort request body text (JSON text or raw string).
   final String? requestBody;
 
@@ -75,12 +82,34 @@ final class TrafficEntry {
     'uri': uri,
     if (host != null) 'host': host,
     'path': path,
+    if (requestHeaders != null && requestHeaders!.isNotEmpty)
+      'requestHeaders': requestHeaders,
     if (requestBody != null) 'requestBody': requestBody,
     if (statusCode != null) 'statusCode': statusCode,
     if (contentType != null) 'contentType': contentType,
     if (responseBody != null) 'responseBody': responseBody,
     if (error != null) 'error': error,
   };
+
+  /// Tolerates both `name: [values]` (current apps) and `name: value` shapes,
+  /// so recordings written by older builds still load.
+  static Map<String, List<String>>? _readHeaders(dynamic value) {
+    if (value is! Map) return null;
+    final headers = <String, List<String>>{};
+    for (final entry in value.entries) {
+      final raw = entry.value;
+      final values = raw is Iterable
+          ? [
+              for (final item in raw)
+                if (item != null) '$item',
+            ]
+          : [if (raw != null) '$raw'];
+      if (values.isNotEmpty) {
+        headers['${entry.key}'] = List.unmodifiable(values);
+      }
+    }
+    return headers.isEmpty ? null : Map.unmodifiable(headers);
+  }
 }
 
 /// In-memory capture buffer with an optional count limit and event callback.
@@ -133,12 +162,29 @@ final class TrafficRecording {
   final BytesBuilder _requestBytes = BytesBuilder(copy: false);
   final StringBuffer _requestText = StringBuffer();
   String? _requestBody;
+  Map<String, List<String>>? _requestHeaders;
   bool _finalized = false;
 
   /// Sets the request body text directly (e.g. Dio's decoded options.data).
   set requestBody(String? text) {
     if (text == null || text.isEmpty) return;
     _requestBody = text;
+  }
+
+  /// Sets the request headers captured by the adapter. Empty names and empty
+  /// value lists are dropped; repeated names keep every value.
+  set requestHeaders(Map<String, List<String>>? headers) {
+    if (headers == null) return;
+    final captured = <String, List<String>>{};
+    for (final entry in headers.entries) {
+      if (entry.key.isEmpty) continue;
+      final values = [
+        for (final value in entry.value)
+          if (value.isNotEmpty) value,
+      ];
+      if (values.isNotEmpty) captured[entry.key] = List.unmodifiable(values);
+    }
+    _requestHeaders = captured.isEmpty ? null : Map.unmodifiable(captured);
   }
 
   /// Collects request body text incrementally (dart:io write* methods).
@@ -168,6 +214,7 @@ final class TrafficRecording {
         uri: uri.toString(),
         host: uri.host.isEmpty ? null : uri.host,
         path: uri.path,
+        requestHeaders: _requestHeaders,
         requestBody: _resolveRequestBody(),
         statusCode: statusCode,
         contentType: contentType,
@@ -188,6 +235,7 @@ final class TrafficRecording {
         uri: uri.toString(),
         host: uri.host.isEmpty ? null : uri.host,
         path: uri.path,
+        requestHeaders: _requestHeaders,
         requestBody: _resolveRequestBody(),
         error: error.toString(),
       ),

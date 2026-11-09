@@ -75,6 +75,34 @@ void main() {
     expect(recorder.since(0).single.requestBody, '{"k":"v"}');
   });
 
+  test('request headers survive capture, JSON and legacy shapes', () {
+    recorder.begin('POST', Uri.parse('https://a.test/x'))
+      ..requestHeaders = {
+        'Content-Type': ['application/json'],
+        'X-Trace': ['a', 'b'],
+        'X-Empty': [],
+      }
+      ..finish(statusCode: 201);
+
+    final entry = recorder.since(0).single;
+    expect(entry.requestHeaders, {
+      'Content-Type': ['application/json'],
+      'X-Trace': ['a', 'b'],
+    });
+
+    final restored = TrafficEntry.fromJson(entry.toJson());
+    expect(restored.requestHeaders, entry.requestHeaders);
+    // Older recordings may store one string per header instead of a list.
+    expect(
+      TrafficEntry.fromJson({
+        'requestHeaders': {'X-Trace': 'abc'},
+      }).requestHeaders,
+      {
+        'X-Trace': ['abc'],
+      },
+    );
+  });
+
   test('returns only entries after the cursor', () {
     for (var i = 0; i < 30; i++) {
       recorder

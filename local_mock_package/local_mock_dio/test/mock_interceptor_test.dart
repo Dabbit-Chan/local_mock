@@ -251,6 +251,37 @@ void main() {
     expect(jsonDecode(real.requestBody!), {'k': 'v'});
   });
 
+  test(
+    'records request headers for mocked and pass-through requests',
+    () async {
+      replace();
+      await dio.get<dynamic>(
+        '/api/profile',
+        options: Options(headers: {'X-Trace': 'mocked'}),
+      );
+      await dio.post<dynamic>(
+        '/api/other',
+        data: {'k': 'v'},
+        options: Options(
+          headers: {
+            'X-Trace': 'real',
+            'X-Multi': ['a', 'b'],
+          },
+        ),
+      );
+
+      final entries = LocalMock.debugTrafficEntries();
+      expect(entries, hasLength(2));
+      expect(entries.first.requestHeaders!['X-Trace'], ['mocked']);
+      expect(entries.last.requestHeaders!['X-Trace'], ['real']);
+      expect(entries.last.requestHeaders!['X-Multi'], ['a', 'b']);
+      final contentType = entries.last.requestHeaders!.entries.firstWhere(
+        (entry) => entry.key.toLowerCase() == 'content-type',
+      );
+      expect(contentType.value, ['application/json']);
+    },
+  );
+
   test('records network failures without a status code', () async {
     dio.httpClientAdapter = _FailingAdapter();
     await expectLater(dio.get<dynamic>('/api/down'), throwsA(isA<DioError>()));

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:re_editor/re_editor.dart';
 
+import '../curl.dart';
 import '../format.dart';
 import '../ui/code_panel.dart';
 import '../ui/primitives.dart';
@@ -51,6 +52,7 @@ class _TrafficDetailState extends State<TrafficDetail> {
     final hasRequestBody = e['requestBody'] != null;
     final hasResponseBody = e['responseBody'] != null;
     final error = e['error'] as String?;
+    final requestHeaders = _readHeaders(e['requestHeaders']);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -113,6 +115,23 @@ class _TrafficDetailState extends State<TrafficDetail> {
                     tooltip: '复制 URL',
                     onPressed: () => copyText(context, uriText, ' URL'),
                   ),
+                  const SizedBox(width: Space.xs),
+                  Tooltip(
+                    message: '复制为可直接执行的 cURL 命令',
+                    child: OutlinedButton(
+                      key: const Key('copy-curl'),
+                      style: OutlinedButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        minimumSize: const Size(0, 32),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: Space.m,
+                        ),
+                      ),
+                      onPressed: () =>
+                          copyText(context, curlForEntry(e), ' cURL 命令'),
+                      child: const Text('复制 cURL'),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: Space.s),
@@ -123,7 +142,32 @@ class _TrafficDetailState extends State<TrafficDetail> {
                 const SizedBox(height: Space.m),
                 const Eyebrow('Query 参数'),
                 const SizedBox(height: 4),
-                _QueryTable(query),
+                _KeyValueTable(query),
+              ],
+              if (requestHeaders.isNotEmpty) ...[
+                const SizedBox(height: Space.m),
+                Row(
+                  children: [
+                    const Eyebrow('请求头'),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${requestHeaders.length}',
+                      style: context.text.labelSmall!.copyWith(color: p.faint),
+                    ),
+                    const Spacer(),
+                    ToolButton(
+                      icon: Icons.copy_all_outlined,
+                      tooltip: '复制全部请求头',
+                      onPressed: () => copyText(
+                        context,
+                        _headerLines(requestHeaders),
+                        '请求头',
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                _KeyValueTable(requestHeaders),
               ],
             ],
           ),
@@ -186,24 +230,49 @@ class _TrafficDetailState extends State<TrafficDetail> {
   }
 }
 
-/// Query parameters as a two-column table; keys keep their exact case.
-class _QueryTable extends StatelessWidget {
-  const _QueryTable(this.query);
+/// Header names/values from either the current app (`name: [values]`) or
+/// older recordings (`name: value`).
+Map<String, List<String>> _readHeaders(Object? value) {
+  if (value is! Map) return const {};
+  final headers = <String, List<String>>{};
+  for (final entry in value.entries) {
+    final raw = entry.value;
+    final values = raw is List
+        ? [
+            for (final item in raw)
+              if (item != null) '$item',
+          ]
+        : [if (raw != null) '$raw'];
+    if (values.isNotEmpty) headers['${entry.key}'] = values;
+  }
+  return headers;
+}
 
-  final Map<String, List<String>> query;
+/// `Name: value` lines, one per header value, for the copy button.
+String _headerLines(Map<String, List<String>> headers) => [
+  for (final header in headers.entries)
+    for (final value in header.value) '${header.key}: $value',
+].join('\n');
+
+/// Two-column name / value table; keys keep their exact case. Used for query
+/// parameters and request headers.
+class _KeyValueTable extends StatelessWidget {
+  const _KeyValueTable(this.values);
+
+  final Map<String, List<String>> values;
 
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
     return Container(
-      constraints: const BoxConstraints(maxHeight: 160),
+      constraints: const BoxConstraints(maxHeight: 150),
       decoration: BoxDecoration(
         border: Border(top: BorderSide(color: p.rule)),
       ),
       child: SingleChildScrollView(
         child: Column(
           children: [
-            for (final param in query.entries)
+            for (final param in values.entries)
               for (final value in param.value.isEmpty ? [''] : param.value)
                 Container(
                   padding: const EdgeInsets.symmetric(vertical: 5),
@@ -214,7 +283,7 @@ class _QueryTable extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       SizedBox(
-                        width: 180,
+                        width: 160,
                         child: SelectableText(
                           param.key,
                           style: mono(context, size: 12.5, color: p.muted),

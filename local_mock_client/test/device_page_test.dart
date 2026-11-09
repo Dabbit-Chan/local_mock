@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:re_editor/re_editor.dart';
 import 'package:local_mock_client/src/panes/rule_editor.dart';
@@ -402,6 +403,57 @@ void main() {
       await openRequest(tester, '/api/feed');
       expect(find.text('Page'), findsOneWidget);
       expect(find.text('2'), findsWidgets);
+    });
+
+    testWidgets('detail shows request headers and copies a curl command', (
+      tester,
+    ) async {
+      final clipboard = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipboard.add('${(call.arguments as Map)['text']}');
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+
+      await openDevice(
+        tester,
+        traffic: [
+          trafficEntry(
+            1,
+            '/api/order',
+            method: 'POST',
+            request: '{"sku":"A1"}',
+            requestHeaders: {
+              'Authorization': ['Bearer token'],
+              'Content-Type': ['application/json'],
+            },
+          ),
+        ],
+      );
+      await openRequest(tester, '/api/order');
+
+      expect(find.text('请求头'), findsOneWidget);
+      expect(find.text('Authorization'), findsOneWidget);
+      expect(find.text('Bearer token'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('copy-curl')));
+      await tester.pumpAndSettle();
+
+      expect(clipboard, hasLength(1));
+      expect(clipboard.single, contains('-X POST'));
+      expect(clipboard.single, contains("-H 'Authorization: Bearer token'"));
+      expect(clipboard.single, contains('--data-raw'));
+      expect(find.text('已复制 cURL 命令'), findsOneWidget);
     });
 
     testWidgets('a request becomes a pre-filled rule draft', (tester) async {

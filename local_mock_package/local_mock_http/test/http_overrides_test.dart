@@ -107,6 +107,48 @@ void main() {
     client.close();
   });
 
+  test(
+    'records request headers for mocked and pass-through requests',
+    () async {
+      replace();
+      final client = createClient();
+
+      final mocked = await client.openUrl('GET', base.resolve('/api/profile'));
+      mocked.headers
+        ..set('X-Trace', 'mocked')
+        ..contentType = ContentType.json;
+      mocked.cookies.add(Cookie('sid', 'abc'));
+      await (await mocked.close()).drain<void>();
+
+      final real = await client.openUrl('POST', base.resolve('/api/other'));
+      real.headers
+        ..set('X-Trace', 'real')
+        ..set('X-Multi', ['a', 'b']);
+      real.write('{"x":1}');
+      await (await real.close()).drain<void>();
+
+      final entries = LocalMock.debugTrafficEntries();
+      String? header(Map<String, List<String>>? headers, String name) {
+        if (headers == null) return null;
+        for (final entry in headers.entries) {
+          if (entry.key.toLowerCase() == name) return entry.value.join(',');
+        }
+        return null;
+      }
+
+      expect(entries, hasLength(2));
+      expect(header(entries.first.requestHeaders, 'x-trace'), 'mocked');
+      expect(header(entries.first.requestHeaders, 'cookie'), 'sid=abc');
+      expect(
+        header(entries.first.requestHeaders, 'content-type'),
+        startsWith('application/json'),
+      );
+      expect(header(entries.last.requestHeaders, 'x-trace'), 'real');
+      expect(header(entries.last.requestHeaders, 'x-multi'), 'a,b');
+      client.close();
+    },
+  );
+
   test('records aborted mock requests as failed entries', () async {
     replace(delayMs: 1000);
     final client = createClient();

@@ -46,6 +46,7 @@ Map<String, dynamic> trafficEntry(
   String? response,
   String? request,
   String? error,
+  Map<String, List<String>>? requestHeaders,
 }) => {
   'revision': revision,
   'startedAt': 1710000000000 + revision * 1000,
@@ -59,6 +60,7 @@ Map<String, dynamic> trafficEntry(
   'contentType': 'application/json',
   'responseBody': ?response,
   'requestBody': ?request,
+  'requestHeaders': ?requestHeaders,
   'error': ?error,
 };
 

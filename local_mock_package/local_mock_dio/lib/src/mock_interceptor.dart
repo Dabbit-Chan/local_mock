@@ -32,6 +32,24 @@ String? _describeBody(Object? data) {
   }
 }
 
+/// Best-effort header map for the capture view; never throws. Dio stores
+/// header values as `dynamic`, sometimes as lists (e.g. `set-cookie`).
+Map<String, List<String>>? _describeHeaders(Map<String, dynamic> headers) {
+  final described = <String, List<String>>{};
+  for (final entry in headers.entries) {
+    final value = entry.value;
+    if (value == null) continue;
+    final values = value is Iterable
+        ? [
+            for (final item in value)
+              if (item != null) '$item',
+          ]
+        : ['$value'];
+    if (values.isNotEmpty) described[entry.key] = values;
+  }
+  return described.isEmpty ? null : described;
+}
+
 /// Serves matching requests from local_mock rules; others go to the network.
 /// Every request that passes through is recorded for the desktop capture
 /// view, whether it was mocked or answered by the real backend.
@@ -100,6 +118,7 @@ final class LocalMockInterceptor extends Interceptor {
     RequestInterceptorHandler handler,
   ) async {
     final traffic = LocalMock.beginTraffic(options.method, options.uri);
+    traffic?.requestHeaders = _describeHeaders(options.headers);
     traffic?.requestBody = _describeBody(options.data);
     final data = options.data;
     final rule = LocalMock.match(
