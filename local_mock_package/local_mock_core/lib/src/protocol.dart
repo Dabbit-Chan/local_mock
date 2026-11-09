@@ -7,4 +7,5 @@ abstract final class LocalMockProtocol {
   static const clear = 'ext.local_mock.clear';
   static const getTraffic = 'ext.local_mock.getTraffic';
   static const clearTraffic = 'ext.local_mock.clearTraffic';
+  static const trafficEvent = 'local_mock.traffic';
 }

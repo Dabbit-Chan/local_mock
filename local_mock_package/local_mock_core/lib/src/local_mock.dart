@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 
@@ -8,6 +9,7 @@ import 'mock_registry.dart';
 import 'mock_rule.dart';
 import 'protocol.dart';
 import 'traffic.dart';
+import 'vm_service_bridge_io.dart';
 
 /// Isolate-local entry point shared by all adapters.
 ///
@@ -20,10 +22,13 @@ abstract final class LocalMock {
   static final _traffic = TrafficRecorder(
     maxEntries: 500,
     onEntry: (entry) {
-      _agent?.report(entry.toJson());
+      developer.postEvent(LocalMockProtocol.trafficEvent, {
+        'entry': entry.toJson(),
+      });
     },
   );
   static LocalMockAgent? _agent;
+  static VmServiceBridge? _bridge;
   static Uri? _serverUri;
 
   static Map<String, dynamic> get _state => {
@@ -31,7 +36,7 @@ abstract final class LocalMock {
     'supportsRecordingMocks': true,
   };
 
-  /// Enabled in Debug and Profile; disabled in Release.
+  /// Enabled in native Debug and Profile only; disabled in Release.
   static const enabled = !kReleaseMode;
 
   /// Starts an outbound relay connection. Returns immediately; unavailable
@@ -47,28 +52,23 @@ abstract final class LocalMock {
       throw ArgumentError('deviceId must not be empty');
     }
     final uri = relayUri(serverUrl, 'app');
+    ensureInitialized();
     disconnect();
     _serverUri = uri;
+    final bridge = VmServiceBridge(
+      onTraffic: (entry) => _agent?.report(entry),
+      onDisconnected: () {
+        _agent?.stop();
+        _agent?.start();
+      },
+    );
+    _bridge = bridge;
     _agent = LocalMockAgent(
       serverUrl: serverUrl,
       deviceId: deviceId,
       deviceName: deviceName ?? deviceId,
-      snapshot: () => {..._state, ..._trafficSnapshot(0)},
-      onCommand: (method, args) {
-        switch (method) {
-          case 'replaceRules':
-            _registry.replace(args['rules']);
-          case 'clear':
-            _registry.clear();
-          case 'clearTraffic':
-            _traffic.clear();
-          case 'getState':
-            break;
-          default:
-            throw FormatException('Unknown command: $method');
-        }
-        return _state;
-      },
+      snapshot: () => bridge.command('getState', const {}),
+      onCommand: (method, args) => bridge.command(method, args),
     )..start();
     return true;
   }
@@ -79,6 +79,8 @@ abstract final class LocalMock {
   static void disconnect() {
     _agent?.stop();
     _agent = null;
+    unawaited(_bridge?.close());
+    _bridge = null;
     _serverUri = null;
   }
 
@@ -93,10 +95,9 @@ abstract final class LocalMock {
   static bool _registered = false;
 
   /// Registers the VM Service extensions once per isolate.
-  /// Returns false when disabled. VM extensions are only registered in Debug.
+  /// Registers on native Debug and Profile builds; never in Release.
   static bool ensureInitialized() {
     if (!enabled) return false;
-    if (!kDebugMode) return true;
     if (!_registered) {
       for (final method in [
         LocalMockProtocol.replaceRules,
@@ -196,9 +197,7 @@ abstract final class LocalMock {
         default:
           throw FormatException('unknown method: $method');
       }
-      return developer.ServiceExtensionResponse.result(
-        jsonEncode(_registry.state),
-      );
+      return developer.ServiceExtensionResponse.result(jsonEncode(_state));
     } on FormatException catch (error) {
       return developer.ServiceExtensionResponse.error(
         developer.ServiceExtensionResponse.invalidParams,

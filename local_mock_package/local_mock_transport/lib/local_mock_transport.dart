@@ -153,7 +153,7 @@ class LocalMockAgent {
   final String deviceName;
   final FutureOr<Map<String, dynamic>> Function(String, Map<String, dynamic>)
   onCommand;
-  final Map<String, dynamic> Function() snapshot;
+  final FutureOr<Map<String, dynamic>> Function() snapshot;
   final Duration reconnectDelay;
   final String sessionId = '${DateTime.now().microsecondsSinceEpoch}';
   RelayPeer? _peer;
@@ -171,30 +171,42 @@ class LocalMockAgent {
   }
 
   Future<void> _connect(int generation) async {
+    RelayPeer? connectingPeer;
     try {
+      final state = await snapshot();
+      if (_stopped || generation != _generation) return;
       final peer = await RelayPeer.connect(
         relayUri(serverUrl, 'app'),
         hello: {
           'deviceId': deviceId,
           'deviceName': deviceName,
           'sessionId': sessionId,
-          'state': snapshot(),
+          'state': state,
         },
         onRequest: (message) => onCommand(
           message['method'] as String,
           Map<String, dynamic>.from(message['args'] as Map),
         ),
       );
+      connectingPeer = peer;
       if (_stopped || generation != _generation) {
         peer.close();
         return;
       }
       _peer = peer;
       // Backfill the bounded buffer, including requests made during handshake.
-      peer.send({'event': 'snapshot', ...snapshot()});
+      final backfill = await snapshot();
+      if (_stopped || generation != _generation) {
+        peer.close();
+        return;
+      }
+      peer.send({'event': 'snapshot', ...backfill});
       await peer.done;
       if (identical(_peer, peer)) _peer = null;
     } catch (_) {
+      // A failed asynchronous snapshot must also release its relay socket.
+      connectingPeer?.close();
+      if (identical(_peer, connectingPeer)) _peer = null;
       // Backend availability must never prevent business app startup.
     }
     if (!_stopped && generation == _generation) {
