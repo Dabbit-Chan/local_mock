@@ -504,6 +504,69 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('detail keeps editor content laid out while bodies resize', (
+      tester,
+    ) async {
+      await openDevice(
+        tester,
+        traffic: [
+          trafficEntry(
+            1,
+            '/api/order',
+            method: 'POST',
+            request: '{"item":1}',
+            response: '{"ok":true}',
+          ),
+        ],
+      );
+      await openRequest(tester, '/api/order');
+
+      final requestBodyPane = find.byKey(const Key('detail-pane-2'));
+      final responseBodyPane = find.byKey(const Key('detail-pane-3'));
+      final requestEditor = find.byType(CodeEditor).first;
+      final responseEditor = find.byType(CodeEditor).last;
+      // Freezing must not move the editor in the element tree: rebuilding it
+      // would drop its scroll position mid-drag.
+      final responseEditorState = tester.state(responseEditor);
+      final originalHeight = tester.getSize(requestBodyPane).height;
+      final splitter = find.byKey(const Key('detail-splitter-2'));
+      final drag = await tester.startGesture(
+        tester.getTopLeft(splitter) + const Offset(8, 2),
+        kind: PointerDeviceKind.mouse,
+      );
+      await tester.pump();
+      // Content is laid out once per drag (at the pane pair's combined
+      // height), so the expensive editors are neither laid out nor repainted
+      // on every pointer move; only the clip follows the splitter.
+      final frozenRequestEditor = tester.getSize(requestEditor).height;
+      final frozenResponseEditor = tester.getSize(responseEditor).height;
+
+      for (var i = 0; i < 3; i++) {
+        await drag.moveBy(const Offset(0, 10));
+        await tester.pump();
+        expect(tester.getSize(requestEditor).height, frozenRequestEditor);
+        expect(tester.getSize(responseEditor).height, frozenResponseEditor);
+        expect(
+          identical(tester.state(responseEditor), responseEditorState),
+          isTrue,
+        );
+      }
+      expect(
+        tester.getSize(requestBodyPane).height,
+        closeTo(originalHeight + 30, 0.01),
+      );
+      // Frozen content never leaves a blank gap while the pane grows.
+      expect(frozenRequestEditor, greaterThan(originalHeight + 30));
+
+      await drag.up();
+      await tester.pumpAndSettle();
+      expect(
+        tester.getSize(responseEditor).height,
+        closeTo(tester.getSize(responseBodyPane).height - 32, 0.01),
+      );
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('detail copies query parameters, headers and a curl command', (
       tester,
     ) async {

@@ -193,6 +193,12 @@ class _TrafficDetailSectionsState extends State<_TrafficDetailSections> {
   final _collapsed = [false, false, false, false];
   final _overflowScroll = ScrollController();
   final _layoutRevision = ValueNotifier<int>(0);
+
+  /// Set while a splitter is being dragged: the two panes on either side of it
+  /// keep their content laid out at a fixed height and are only clipped, so a
+  /// drag re-positions cached layers instead of re-laying out and repainting
+  /// every visible line on each pointer move.
+  _PaneFreeze? _freeze;
   static const _labels = ['Query 参数', '请求头', '请求体', '响应体'];
   static const _collapsedHeight = 34.0;
   static const _splitterHeight = 20.0;
@@ -219,6 +225,8 @@ class _TrafficDetailSectionsState extends State<_TrafficDetailSections> {
       _minPaneHeight - sizes[before]!,
       sizes[after]! - _minPaneHeight,
     );
+    // At either limit the layout would not change; skip the frame.
+    if (change == 0) return;
     for (final index in sizes.keys) {
       if (!_collapsed[index]) {
         _weights[index] = sizes[index]! - _minPaneHeight;
@@ -229,80 +237,104 @@ class _TrafficDetailSectionsState extends State<_TrafficDetailSections> {
     _layoutRevision.value++;
   }
 
+  /// Freezes (or releases) the content of the pane pair being dragged. No
+  /// [setState]: the layout revision that every pointer move bumps already
+  /// rebuilds the size-driven subtree, and the pane widgets stay identical.
+  void _setFreeze(_PaneFreeze? value) {
+    if (_freeze == value) return;
+    _freeze = value;
+    _layoutRevision.value++;
+  }
+
   @override
   Widget build(BuildContext context) {
     final visible = _visible;
     if (visible.isEmpty) return const SizedBox.shrink();
     // Reuse the content widgets while resizing; only their constraints change.
     final panes = {for (final index in visible) index: _pane(context, index)};
-    return ValueListenableBuilder<int>(
-      valueListenable: _layoutRevision,
-      builder: (context, _, child) => LayoutBuilder(
-        builder: (context, constraints) {
-          final expanded = [
-            for (final i in visible)
-              if (!_collapsed[i]) i,
-          ];
-          final fixedHeight =
-              (visible.length - expanded.length) * _collapsedHeight +
-              (visible.length - 1) * _splitterHeight;
-          final minimumHeight = fixedHeight + expanded.length * _minPaneHeight;
-          // On short windows, scroll the stack instead of crushing editor
-          // toolbars or making collapsed sections impossible to reopen.
-          final layoutHeight = constraints.maxHeight < minimumHeight
-              ? minimumHeight
-              : constraints.maxHeight;
-          final extraHeight = layoutHeight - minimumHeight;
-          final totalWeight = expanded.fold<double>(
-            0,
-            (sum, i) => sum + _weights[i],
-          );
-          final sizes = <int, double>{
-            for (final i in visible)
-              i: _collapsed[i]
-                  ? _collapsedHeight
-                  : _minPaneHeight +
-                        extraHeight *
-                            (totalWeight > 0
-                                ? _weights[i] / totalWeight
-                                : 1 / expanded.length),
-          };
-
-          return ScrollConfiguration(
-            behavior: ScrollConfiguration.of(
-              context,
-            ).copyWith(scrollbars: false),
-            child: Scrollbar(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final expanded = [
+          for (final i in visible)
+            if (!_collapsed[i]) i,
+        ];
+        final fixedHeight =
+            (visible.length - expanded.length) * _collapsedHeight +
+            (visible.length - 1) * _splitterHeight;
+        final minimumHeight = fixedHeight + expanded.length * _minPaneHeight;
+        // On short windows, scroll the stack instead of crushing editor
+        // toolbars or making collapsed sections impossible to reopen.
+        final layoutHeight = constraints.maxHeight < minimumHeight
+            ? minimumHeight
+            : constraints.maxHeight;
+        final extraHeight = layoutHeight - minimumHeight;
+        // Keep the scroll view (and its scrollbar) outside the revision
+        // builder: a drag only changes pane heights, never the viewport.
+        return ScrollConfiguration(
+          behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+          child: Scrollbar(
+            controller: _overflowScroll,
+            child: SingleChildScrollView(
               controller: _overflowScroll,
-              child: SingleChildScrollView(
-                controller: _overflowScroll,
-                primary: false,
-                child: SizedBox(
-                  height: layoutHeight,
-                  child: Column(
-                    children: [
-                      for (
-                        var position = 0;
-                        position < visible.length;
-                        position++
-                      ) ...[
-                        SizedBox(
-                          key: Key('detail-pane-${visible[position]}'),
-                          height: sizes[visible[position]],
-                          child: panes[visible[position]],
-                        ),
-                        if (position < visible.length - 1)
-                          _splitter(visible, position, sizes),
+              primary: false,
+              child: ValueListenableBuilder<int>(
+                valueListenable: _layoutRevision,
+                builder: (context, _, child) {
+                  final totalWeight = expanded.fold<double>(
+                    0,
+                    (sum, i) => sum + _weights[i],
+                  );
+                  final sizes = <int, double>{
+                    for (final i in visible)
+                      i: _collapsed[i]
+                          ? _collapsedHeight
+                          : _minPaneHeight +
+                                extraHeight *
+                                    (totalWeight > 0
+                                        ? _weights[i] / totalWeight
+                                        : 1 / expanded.length),
+                  };
+
+                  return SizedBox(
+                    height: layoutHeight,
+                    child: Column(
+                      children: [
+                        for (
+                          var position = 0;
+                          position < visible.length;
+                          position++
+                        ) ...[
+                          SizedBox(
+                            key: Key('detail-pane-${visible[position]}'),
+                            height: sizes[visible[position]],
+                            child: _PaneContent(
+                              frozenHeight: _frozenHeightFor(visible[position]),
+                              child: panes[visible[position]]!,
+                            ),
+                          ),
+                          if (position < visible.length - 1)
+                            _splitter(visible, position, sizes),
+                        ],
                       ],
-                    ],
-                  ),
-                ),
+                    ),
+                  );
+                },
               ),
             ),
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
+  }
+
+  /// While its pair is dragged, a pane's content keeps the pair's combined
+  /// height (an upper bound for either side) and is clipped to the pane, so no
+  /// descendant is laid out or repainted until the drag ends.
+  double? _frozenHeightFor(int index) {
+    final freeze = _freeze;
+    if (freeze == null || _collapsed[index]) return null;
+    if (index != freeze.before && index != freeze.after) return null;
+    return freeze.height;
   }
 
   Widget _pane(BuildContext context, int index) {
@@ -387,7 +419,59 @@ class _TrafficDetailSectionsState extends State<_TrafficDetailSections> {
       key: Key('detail-splitter-$before'),
       height: _splitterHeight,
       label: '上下拖动调整「${_labels[before]}」与「${_labels[after]}」的高度',
+      // The pair's combined height cannot change during the drag, so it is a
+      // tight upper bound for freezing either pane's content.
+      onDragStart: () => _setFreeze(
+        _PaneFreeze(before, after, sizes[before]! + sizes[after]!),
+      ),
+      onDragEnd: () => _setFreeze(null),
       onDrag: (delta) => _resize(before, after, delta, sizes),
+    );
+  }
+}
+
+/// The pane pair being dragged, and the content height both panes keep while
+/// the drag is in flight.
+class _PaneFreeze {
+  const _PaneFreeze(this.before, this.after, this.height);
+
+  final int before;
+  final int after;
+  final double height;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _PaneFreeze &&
+      other.before == before &&
+      other.after == after &&
+      other.height == height;
+
+  @override
+  int get hashCode => Object.hash(before, after, height);
+}
+
+/// Lays its child out at a fixed [frozenHeight] (top-aligned) while the splitter
+/// is dragged, and clipped to the pane's current bounds. The widget structure
+/// never changes, so the pane's subtree (and each editor's scroll position)
+/// survives the drag; the child also sits behind a [RepaintBoundary] so moving
+/// the clip only re-composites an already recorded layer.
+class _PaneContent extends StatelessWidget {
+  const _PaneContent({required this.frozenHeight, required this.child});
+
+  final double? frozenHeight;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRect(
+      // Only pay for a clip layer while the pane is actually being clipped.
+      clipBehavior: frozenHeight == null ? Clip.none : Clip.hardEdge,
+      child: OverflowBox(
+        alignment: Alignment.topCenter,
+        minHeight: frozenHeight,
+        maxHeight: frozenHeight,
+        child: RepaintBoundary(child: child),
+      ),
     );
   }
 }
@@ -398,11 +482,15 @@ class _DetailSplitter extends StatefulWidget {
     super.key,
     required this.height,
     required this.label,
+    required this.onDragStart,
+    required this.onDragEnd,
     required this.onDrag,
   });
 
   final double height;
   final String label;
+  final VoidCallback onDragStart;
+  final VoidCallback onDragEnd;
   final ValueChanged<double> onDrag;
 
   @override
@@ -421,6 +509,7 @@ class _DetailSplitterState extends State<_DetailSplitter> {
       _pointer = null;
       _resizeFromStart = null;
     });
+    widget.onDragEnd();
   }
 
   @override
@@ -444,6 +533,7 @@ class _DetailSplitterState extends State<_DetailSplitter> {
               _startY = event.position.dy;
               _resizeFromStart = widget.onDrag;
             });
+            widget.onDragStart();
           },
           onPointerMove: (event) {
             if (event.pointer == _pointer) {
