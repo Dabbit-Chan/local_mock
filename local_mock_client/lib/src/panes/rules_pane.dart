@@ -324,7 +324,7 @@ class _RulesActions extends StatelessWidget {
       action(
         key: const Key('rules-import'),
         label: '导入',
-        tooltip: '导入规则文件…',
+        tooltip: '导入规则文件',
         onPressed: () => unawaited(_import(context)),
       ),
       action(
