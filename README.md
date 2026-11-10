@@ -63,6 +63,22 @@ local_mock 是给 Flutter App 用的接口 Mock 与抓包工具，面向开发�
   </tr>
 </table>
 
+## 🚀 运行与打包
+
+使用 `flutter run` 以 Debug / Profile 模式运行接入 local_mock 的 App 时，需要添加 `--no-dds`，避免 DDS 接管 VM Service 后导致控制台无法发现设备：
+
+```bash
+flutter run --debug --no-dds
+flutter run --profile --no-dds
+```
+
+`flutter build` 打包命令不需要添加 `--no-dds`，例如：
+
+```bash
+flutter build apk --debug
+flutter build apk --profile
+```
+
 ## 🧭 技术原理
 
 ```mermaid
