@@ -244,9 +244,10 @@ void main() {
     }
 
     Future<void> fromRecording(WidgetTester tester) async {
-      await tapKey(tester, const Key('rules-menu'));
-      await tapText(tester, '从录制生成录制组');
-      await tester.tap(find.textContaining('登录流程').last);
+      await tapKey(tester, const Key('rules-from-recording'));
+      // Only the menu packs a session as "name · N 个可用请求"; the rule list
+      // and the save toast can also contain the name.
+      await tester.tap(find.textContaining('个可用请求').last);
       await tester.pumpAndSettle();
     }
 
@@ -273,7 +274,7 @@ void main() {
       expect(group['matchParams'], isTrue);
       expect((group['rules'] as List).single['body'], {'ok': 'edited'});
       expect(find.text('登录流程'), findsWidgets);
-      expect(find.text('录制组'), findsOneWidget);
+      expect(find.widgetWithText(Tag, '录制组'), findsOneWidget);
 
       // Generating again reuses the group and its edits.
       await fromRecording(tester);
@@ -320,8 +321,7 @@ void main() {
 
     testWidgets('old app versions cannot receive groups', (tester) async {
       final connection = await openWithRecording(tester, supportsGroups: false);
-      await tapKey(tester, const Key('rules-menu'));
-      await tapText(tester, '从录制生成录制组');
+      await tapKey(tester, const Key('rules-from-recording'));
       expect(find.textContaining('版本过旧'), findsOneWidget);
       expect(connection.applied, isNull);
     });
@@ -351,14 +351,12 @@ void main() {
         files: files,
         location: '/devices/phone',
       );
-      await tapKey(tester, const Key('rules-menu'));
-      await tapText(tester, '导入规则文件…');
+      await tapKey(tester, const Key('rules-import'));
       await tapText(tester, '替换');
       expect(connection.applied, hasLength(1));
       expect(find.text('登录流程'), findsOneWidget);
 
-      await tapKey(tester, const Key('rules-menu'));
-      await tapText(tester, '导出规则文件');
+      await tapKey(tester, const Key('rules-export'));
       expect(jsonDecode(files.exported!), [group]);
     });
   });

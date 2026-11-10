@@ -224,7 +224,7 @@ class _DevicePageState extends State<DevicePage> {
     }
   }
 
-  Future<void> _saveRule(Rule? original, Rule rule, Entry? sample) async {
+  Future<void> _saveRule(Rule? original, Rule rule) async {
     // A stale [original] throws synchronously and reaches the editor; push
     // failures are asynchronous and surface through [RuleBook.syncError].
     final saving = original == null
@@ -232,12 +232,11 @@ class _DevicePageState extends State<DevicePage> {
         : _book.replace(original, rule);
     await saving.catchError((_) {});
     if (!mounted) return;
-    final saved = _book.byId(rule['id'] as String) ?? rule;
+    // Saving ends this edit: close the inspector and leave the rule list
+    // showing the result.
     setState(() {
       _dirty = false;
-      _inspect = isGroup(saved)
-          ? InspectGroup(saved, original: saved)
-          : InspectRule(saved, original: saved, sample: sample);
+      _inspect = const InspectNothing();
     });
     final error = _book.syncError;
     toast(
@@ -259,10 +258,10 @@ class _DevicePageState extends State<DevicePage> {
     }
     await _book.upsertGroup(group).catchError((_) {});
     if (!mounted) return;
-    final saved = _book.byId(group['id'] as String) ?? group;
+    // Same as a rule save: the group edit is done, show the list again.
     setState(() {
       _dirty = false;
-      _inspect = InspectGroup(saved, original: saved);
+      _inspect = const InspectNothing();
     });
     final error = _book.syncError;
     toast(
@@ -442,7 +441,7 @@ class _DevicePageState extends State<DevicePage> {
           onDirtyChanged: _setDirty,
           onCancel: _cancelEdit,
           onDelete: original == null ? null : () => _delete(original),
-          onSave: (rule) => _saveRule(original, rule, sample),
+          onSave: (rule) => _saveRule(original, rule),
         );
       case InspectGroup(:final draft, :final original):
         // The id the group already holds in the list is not a conflict.

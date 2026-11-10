@@ -6,9 +6,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:re_editor/re_editor.dart';
 import 'package:local_mock_client/src/panes/rule_editor.dart';
+import 'package:local_mock_client/src/panes/rules_pane.dart';
 import 'package:local_mock_client/src/rule_store.dart';
 import 'package:local_mock_client/src/panes/traffic_list.dart';
 import 'package:local_mock_client/src/ui/primitives.dart';
+import 'package:local_mock_client/src/ui/theme.dart';
 
 import 'support/harness.dart';
 
@@ -55,6 +57,10 @@ Finder request(String path) => find.descendant(
   of: find.byType(TrafficRow),
   matching: find.textContaining(path, findRichText: true),
 );
+
+/// A rule row in column 01 (the request list can show the same path).
+Finder ruleRow(String text) =>
+    find.descendant(of: find.byType(RulesPane), matching: find.text(text));
 
 Future<void> openRequest(WidgetTester tester, String path) async {
   await tester.tap(request(path));
@@ -136,8 +142,9 @@ void main() {
     expect(connection.applied!.single, containsPair('path', '/api/new'));
     expect(connection.applied!.single['body'], {'hello': 'world'});
     expect(connection.applied!.single['id'], 'rule-1');
-    // The editor stays open on the saved rule.
-    expect(find.text('编辑规则'), findsOneWidget);
+    // Saving closes the inspector; the rule list already shows the result.
+    expect(find.text('编辑规则'), findsNothing);
+    expect(find.text('选中一条规则来编辑，或选中一个请求查看详情。'), findsOneWidget);
     expect(find.text('/api/new'), findsWidgets);
   });
 
@@ -174,7 +181,10 @@ void main() {
     expect(saved['statusCode'], 200);
     expect(saved['headers'], {'x-mock': '1'});
     expect(saved['body'], {'name': 'real'});
+    expect(find.text('编辑规则'), findsNothing);
 
+    await tester.tap(ruleRow('/api/profile'));
+    await tester.pumpAndSettle();
     await tapText(tester, '整包替换');
     expect(codeAt(tester, RuleEditorKeys.body).text, contains('"real"'));
     await tapKey(tester, RuleEditorKeys.save);
@@ -287,12 +297,79 @@ void main() {
     );
   });
 
+  testWidgets('wide panes keep the rule actions in the heading row', (
+    tester,
+  ) async {
+    await openDevice(tester, rules: [_profile]);
+    tester.view.physicalSize = const Size(2600, 900);
+    await tester.pumpAndSettle();
+    const keys = [
+      'rules-from-recording',
+      'rules-import',
+      'rules-export',
+      'rules-resync',
+      'rules-clear',
+    ];
+    final newRule = tester.getCenter(find.byKey(const Key('new-rule')));
+    for (final key in keys) {
+      final button = find.byKey(Key(key));
+      expect(tester.getCenter(button).dy, newRule.dy);
+      expect(
+        find.descendant(of: button, matching: find.byType(Text)),
+        findsOneWidget,
+        reason: 'actions are plain text buttons, like 新建',
+      );
+    }
+    expect(find.byKey(const Key('rules-menu')), findsNothing);
+  });
+
+  testWidgets('narrow panes keep every rule action without overflowing', (
+    tester,
+  ) async {
+    await openDevice(tester, rules: [_profile]);
+    tester.view.physicalSize = const Size(1200, 900);
+    await tester.pumpAndSettle();
+    final heading = tester.getCenter(find.byKey(const Key('new-rule')));
+    final chips = [
+      for (final key in [
+        'rules-from-recording',
+        'rules-import',
+        'rules-export',
+        'rules-resync',
+        'rules-clear',
+      ])
+        tester.getCenter(find.byKey(Key(key))),
+    ];
+    for (final chip in chips) {
+      expect(chip.dy, greaterThan(heading.dy));
+      expect(chip.dy, chips.first.dy, reason: 'chips stay on one row');
+    }
+  });
+
+  testWidgets('rule editor actions hug the right edge of the pane', (
+    tester,
+  ) async {
+    await openDevice(tester, rules: [_profile, _order]);
+    await tapText(tester, '/api/profile');
+    final pane = tester.getRect(find.byType(RuleEditor));
+    final save = tester.getRect(find.byKey(RuleEditorKeys.save));
+    final cancel = tester.getRect(find.widgetWithText(OutlinedButton, '取消'));
+    expect(pane.right - save.right, Space.gutter);
+    expect(save.left, greaterThan(cancel.right));
+
+    // The unsaved tag must not push the actions inwards.
+    await tester.enterText(field('path'), '/api/changed');
+    await tester.pumpAndSettle();
+    expect(find.text('未保存'), findsOneWidget);
+    final dirtySave = tester.getRect(find.byKey(RuleEditorKeys.save));
+    expect(pane.right - dirtySave.right, Space.gutter);
+  });
+
   group('rule files', () {
     testWidgets('export writes the current list as JSON', (tester) async {
       final files = RuleFiles();
       await openDevice(tester, rules: [_profile, _order], files: files);
-      await tapKey(tester, const Key('rules-menu'));
-      await tapText(tester, '导出规则文件');
+      await tapKey(tester, const Key('rules-export'));
       final exported = jsonDecode(files.exported!) as List;
       expect(exported.map((r) => r['id']), ['profile', 'order']);
     });
@@ -306,14 +383,12 @@ void main() {
         rules: [_profile],
         files: files,
       );
-      await tapKey(tester, const Key('rules-menu'));
-      await tapText(tester, '导入规则文件…');
+      await tapKey(tester, const Key('rules-import'));
       expect(find.textContaining('文件中有 1 条规则，将替换当前全部 1 条规则'), findsOneWidget);
       await tapText(tester, '取消');
       expect(connection.applied, isNull);
 
-      await tapKey(tester, const Key('rules-menu'));
-      await tapText(tester, '导入规则文件…');
+      await tapKey(tester, const Key('rules-import'));
       await tapText(tester, '替换');
       expect(connection.applied!.map((r) => r['id']), ['order']);
       expect(find.text('/api/order'), findsOneWidget);
@@ -332,8 +407,7 @@ void main() {
           rules: [_profile],
           files: files,
         );
-        await tapKey(tester, const Key('rules-menu'));
-        await tapText(tester, '导入规则文件…');
+        await tapKey(tester, const Key('rules-import'));
         expect(find.textContaining('导入失败'), findsOneWidget);
         expect(connection.applied, isNull);
         expect(find.text('/api/profile'), findsOneWidget);
@@ -342,12 +416,10 @@ void main() {
 
     testWidgets('clearing device rules needs confirmation', (tester) async {
       final connection = await openDevice(tester, rules: [_profile]);
-      await tapKey(tester, const Key('rules-menu'));
-      await tapText(tester, '清空设备上的规则');
+      await tapKey(tester, const Key('rules-clear'));
       await tapText(tester, '取消');
       expect(connection.applied, isNull);
-      await tapKey(tester, const Key('rules-menu'));
-      await tapText(tester, '清空设备上的规则');
+      await tapKey(tester, const Key('rules-clear'));
       await tapText(tester, '清空');
       expect(connection.applied, isEmpty);
       expect(find.text('还没有规则'), findsOneWidget);
@@ -717,6 +789,8 @@ void main() {
           'filter.city': '杭州',
         });
 
+        await tester.tap(ruleRow('/api/order'));
+        await tester.pumpAndSettle();
         await tapKey(tester, const Key('remove-params'));
         expect(find.byKey(const Key('expand-params')), findsOneWidget);
         await tapKey(tester, RuleEditorKeys.save);

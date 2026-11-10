@@ -133,8 +133,8 @@ class _RecordingPageState extends State<RecordingPage> {
                     ),
                     const SizedBox(height: Space.m),
                     Text(
-                      '要把这段录制变成 Mock：进入设备调试页，在「规则」列的更多菜单中选择'
-                      '「从录制生成录制组」。失败请求、二进制响应和无法还原的请求体只供查看，不会生成规则。',
+                      '要把这段录制变成 Mock：进入设备调试页，点击「规则」列的'
+                      '「录制组」按钮并选择这段录制。失败请求、二进制响应和无法还原的请求体只供查看，不会生成规则。',
                       style: context.text.bodySmall,
                     ),
                   ],

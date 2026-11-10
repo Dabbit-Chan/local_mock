@@ -637,22 +637,31 @@ class _RuleEditorState extends State<RuleEditor> {
           children: [
             Text('03', style: mono(context, size: 12, color: p.signal)),
             const SizedBox(width: Space.m),
-            Flexible(
-              child: Text(
-                _inGroup
-                    ? '录制组接口'
-                    : widget.isNew
-                    ? '新建规则'
-                    : '编辑规则',
-                overflow: TextOverflow.ellipsis,
-                style: context.text.headlineSmall,
+            // Takes the free space so the actions stay flush with the right
+            // edge; the tag keeps sitting right after the title.
+            Expanded(
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      _inGroup
+                          ? '录制组接口'
+                          : widget.isNew
+                          ? '新建规则'
+                          : '编辑规则',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.text.headlineSmall,
+                    ),
+                  ),
+                  if (_dirty && !widget.isNew) ...[
+                    const SizedBox(width: Space.m),
+                    const Tag('未保存', tone: TagTone.outline),
+                  ],
+                ],
               ),
             ),
-            if (_dirty && !widget.isNew) ...[
-              const SizedBox(width: Space.m),
-              const Tag('未保存', tone: TagTone.outline),
-            ],
-            const Spacer(),
+            const SizedBox(width: Space.m),
             if (widget.onDelete != null) ...[
               TextButton(
                 onPressed: widget.onDelete,

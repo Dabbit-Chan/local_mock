@@ -170,18 +170,23 @@ class _CodePanelState extends State<CodePanel> {
             child: Row(
               children: [
                 if (widget.label != null) Eyebrow(widget.label!),
-                if (_error != null) ...[
-                  const SizedBox(width: Space.m),
-                  Flexible(
-                    child: Text(
-                      _error!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: context.text.bodySmall!.copyWith(color: p.signal),
-                    ),
-                  ),
-                ],
-                const Spacer(),
+                // The error text owns the free space, so the trailing actions
+                // stay flush with the right edge.
+                Expanded(
+                  child: _error == null
+                      ? const SizedBox.shrink()
+                      : Padding(
+                          padding: const EdgeInsets.only(left: Space.m),
+                          child: Text(
+                            _error!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: context.text.bodySmall!.copyWith(
+                              color: p.signal,
+                            ),
+                          ),
+                        ),
+                ),
                 ?widget.trailing,
                 if (widget.formatAction && !widget.readOnly)
                   ToolButton(

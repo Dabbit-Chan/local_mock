@@ -39,80 +39,93 @@ class RulesPane extends StatelessWidget {
       ]),
       builder: (context, _) {
         final rules = book.rules;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SectionHeading(
-              index: '01',
-              title: '规则',
-              count: '${rules.length}',
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  FilledButton(
-                    key: const Key('new-rule'),
-                    onPressed: onNew,
-                    child: const Text('新建'),
-                  ),
-                  const SizedBox(width: 4),
-                  _RulesMenu(onFromRecording: onFromRecording),
-                ],
-              ),
-            ),
-            const Hairline(strong: true),
-            _SyncLine(book: book),
-            const Hairline(),
-            Expanded(
-              child: rules.isEmpty
-                  ? EmptyState(
-                      title: '还没有规则',
-                      body:
-                          '新建一条规则，或在右侧请求列表中选中一个请求，'
-                          '以它的真实响应为起点创建。',
-                      action: OutlinedButton(
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            // Wide panes keep every action in the heading row; narrow ones drop
+            // the text buttons to their own row instead of overflowing.
+            final inline = constraints.maxWidth >= _inlineActionsWidth;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SectionHeading(
+                  index: '01',
+                  title: '规则',
+                  count: '${rules.length}',
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (inline) ...[
+                        _RulesActions(
+                          onFromRecording: onFromRecording,
+                          inline: true,
+                        ),
+                        const SizedBox(width: Space.s),
+                      ],
+                      FilledButton(
+                        key: const Key('new-rule'),
                         onPressed: onNew,
-                        child: const Text('新建规则'),
+                        child: const Text('新建'),
                       ),
-                    )
-                  : ReorderableListView.builder(
-                      buildDefaultDragHandles: false,
-                      itemCount: rules.length,
-                      onReorderItem: (from, to) =>
-                          unawaited(book.move(from, to).catchError((_) {})),
-                      itemBuilder: (context, index) {
-                        final rule = rules[index];
-                        return _RuleRow(
-                          key: ValueKey('rule-${rule['id']}'),
-                          index: index,
-                          rule: rule,
-                          selected:
-                              identical(rule, selected) ||
-                              (selected != null &&
-                                  selected!['id'] == rule['id']),
-                          onOpen: () => onOpen(rule),
-                          onDelete: () => onDelete(rule),
-                          onToggle: (value) => unawaited(
-                            book.setEnabled(rule, value).catchError((_) {}),
+                    ],
+                  ),
+                ),
+                if (!inline) _RulesActions(onFromRecording: onFromRecording),
+                const Hairline(strong: true),
+                _SyncLine(book: book),
+                const Hairline(),
+                Expanded(
+                  child: rules.isEmpty
+                      ? EmptyState(
+                          title: '还没有规则',
+                          body:
+                              '新建一条规则，或在右侧请求列表中选中一个请求，'
+                              '以它的真实响应为起点创建。',
+                          action: OutlinedButton(
+                            onPressed: onNew,
+                            child: const Text('新建规则'),
                           ),
-                        );
-                      },
-                    ),
-            ),
-            const Hairline(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                Space.gutter,
-                Space.m,
-                Space.gutter,
-                Space.l,
-              ),
-              child: Text(
-                '自上而下匹配，第一条启用且命中的规则生效，规则之间不叠加。'
-                '未命中的请求照常访问网络。拖动 ⠿ 调整顺序。',
-                style: context.text.bodySmall,
-              ),
-            ),
-          ],
+                        )
+                      : ReorderableListView.builder(
+                          buildDefaultDragHandles: false,
+                          itemCount: rules.length,
+                          onReorderItem: (from, to) =>
+                              unawaited(book.move(from, to).catchError((_) {})),
+                          itemBuilder: (context, index) {
+                            final rule = rules[index];
+                            return _RuleRow(
+                              key: ValueKey('rule-${rule['id']}'),
+                              index: index,
+                              rule: rule,
+                              selected:
+                                  identical(rule, selected) ||
+                                  (selected != null &&
+                                      selected!['id'] == rule['id']),
+                              onOpen: () => onOpen(rule),
+                              onDelete: () => onDelete(rule),
+                              onToggle: (value) => unawaited(
+                                book.setEnabled(rule, value).catchError((_) {}),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+                const Hairline(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    Space.gutter,
+                    Space.m,
+                    Space.gutter,
+                    Space.l,
+                  ),
+                  child: Text(
+                    '自上而下匹配，第一条启用且命中的规则生效，规则之间不叠加。'
+                    '未命中的请求照常访问网络。拖动 ⠿ 调整顺序。',
+                    style: context.text.bodySmall,
+                  ),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -182,10 +195,21 @@ class _SyncLine extends StatelessWidget {
   }
 }
 
-class _RulesMenu extends StatelessWidget {
-  const _RulesMenu({required this.onFromRecording});
+/// Width at which the rule actions move into the heading row: the five text
+/// buttons plus the title and 新建 need roughly this much room.
+const _inlineActionsWidth = 460.0;
+
+/// The rule-list actions, always visible, as plain text buttons like 新建: in
+/// the heading row when the pane is wide enough, otherwise on their own row
+/// right below it. No second-level menu for the things that get used all the
+/// time.
+class _RulesActions extends StatelessWidget {
+  const _RulesActions({required this.onFromRecording, this.inline = false});
 
   final ValueChanged<TrafficSession> onFromRecording;
+
+  /// Compact row for [SectionHeading] instead of the strip under it.
+  final bool inline;
 
   Future<void> _import(BuildContext context) async {
     final services = AppScope.of(context);
@@ -252,67 +276,127 @@ class _RulesMenu extends StatelessWidget {
     final sessions = services.library.sessions;
     final groupsSupported =
         !connection.connected || connection.supportsRecordingMocks;
-    return MenuAnchor(
-      alignmentOffset: const Offset(0, 4),
-      menuChildren: [
-        SubmenuButton(
-          menuChildren: [
-            if (sessions.isEmpty) const MenuItemButton(child: Text('还没有录制')),
-            for (final session in sessions)
-              MenuItemButton(
-                onPressed:
-                    groupsSupported &&
-                        !connection.recording &&
-                        session.replayableEntries.isNotEmpty
-                    ? () => onFromRecording(session)
-                    : null,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 320),
-                  child: Text(
-                    '${session.name}  ·  ${session.replayableEntries.length} 个可用请求',
-                    overflow: TextOverflow.ellipsis,
-                  ),
+
+    Widget action({
+      required Key key,
+      required String label,
+      required String tooltip,
+      required VoidCallback? onPressed,
+    }) => _TextAction(
+      key: key,
+      label: label,
+      tooltip: tooltip,
+      onPressed: onPressed,
+    );
+
+    final buttons = <Widget>[
+      MenuAnchor(
+        alignmentOffset: const Offset(0, 4),
+        menuChildren: [
+          if (sessions.isEmpty) const MenuItemButton(child: Text('还没有录制')),
+          for (final session in sessions)
+            MenuItemButton(
+              onPressed:
+                  groupsSupported &&
+                      !connection.recording &&
+                      session.replayableEntries.isNotEmpty
+                  ? () => onFromRecording(session)
+                  : null,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 320),
+                child: Text(
+                  '${session.name}  ·  ${session.replayableEntries.length} 个可用请求',
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-            if (!groupsSupported)
-              const MenuItemButton(child: Text('设备上的 local_mock 版本过旧，不支持录制组')),
-          ],
-          child: const Text('从录制生成录制组'),
-        ),
-        const Divider(),
-        MenuItemButton(
-          onPressed: () => unawaited(_import(context)),
-          child: const Text('导入规则文件…'),
-        ),
-        MenuItemButton(
-          onPressed: () => unawaited(_export(context)),
-          child: const Text('导出规则文件'),
-        ),
-        const Divider(),
-        MenuItemButton(
-          onPressed: connection.ready
-              ? () => unawaited(services.rules.push().catchError((_) {}))
-              : null,
-          child: const Text('重新同步到设备'),
-        ),
-        MenuItemButton(
-          onPressed: connection.ready
-              ? () => unawaited(_clearDevice(context))
-              : null,
-          child: Text(
-            '清空设备上的规则',
-            style: TextStyle(
-              color: connection.ready ? context.palette.signal : null,
             ),
+          if (!groupsSupported)
+            const MenuItemButton(child: Text('设备上的 local_mock 版本过旧，不支持录制组')),
+        ],
+        builder: (context, controller, _) => action(
+          key: const Key('rules-from-recording'),
+          label: '录制组',
+          tooltip: '从录制生成录制组',
+          onPressed: () =>
+              controller.isOpen ? controller.close() : controller.open(),
+        ),
+      ),
+      action(
+        key: const Key('rules-import'),
+        label: '导入',
+        tooltip: '导入规则文件…',
+        onPressed: () => unawaited(_import(context)),
+      ),
+      action(
+        key: const Key('rules-export'),
+        label: '导出',
+        tooltip: '导出规则文件',
+        onPressed: () => unawaited(_export(context)),
+      ),
+      action(
+        key: const Key('rules-resync'),
+        label: '同步',
+        tooltip: '重新同步到设备',
+        onPressed: connection.ready
+            ? () => unawaited(services.rules.push().catchError((_) {}))
+            : null,
+      ),
+      action(
+        key: const Key('rules-clear'),
+        label: '清空',
+        tooltip: '清空设备上的规则',
+        onPressed: connection.ready
+            ? () => unawaited(_clearDevice(context))
+            : null,
+      ),
+    ];
+
+    if (inline) {
+      return Row(mainAxisSize: MainAxisSize.min, children: buttons);
+    }
+    return Padding(
+      // Buttons pad their labels by 10, so this lines the text up with the
+      // heading and the rule list below.
+      padding: const EdgeInsets.fromLTRB(
+        Space.gutter - 10,
+        0,
+        Space.s,
+        Space.s,
+      ),
+      child: Wrap(spacing: Space.xs, runSpacing: Space.xs, children: buttons),
+    );
+  }
+}
+
+/// A rule action rendered as a text-only button, next to 新建.
+class _TextAction extends StatelessWidget {
+  const _TextAction({
+    super.key,
+    required this.label,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final String label;
+  final String tooltip;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Tooltip(
+      message: tooltip,
+      child: TextButton(
+        onPressed: onPressed,
+        style: ButtonStyle(
+          foregroundColor: WidgetStateProperty.resolveWith(
+            (s) => s.contains(WidgetState.disabled) ? p.faint : p.ink,
+          ),
+          padding: const WidgetStatePropertyAll(
+            EdgeInsets.symmetric(horizontal: 10),
           ),
         ),
-      ],
-      builder: (context, controller, _) => ToolButton(
-        key: const Key('rules-menu'),
-        icon: Icons.more_horiz,
-        tooltip: '更多：导入、导出、录制组',
-        onPressed: () =>
-            controller.isOpen ? controller.close() : controller.open(),
+        child: Text(label),
       ),
     );
   }

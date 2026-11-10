@@ -527,6 +527,25 @@ class Labeled extends StatelessWidget {
   );
 }
 
+/// Distance from the top of a one-line [style] to its first baseline.
+///
+/// Used to sit two texts of different sizes on a shared baseline: their line
+/// boxes have different heights, so aligning the boxes themselves leaves the
+/// text visibly offset.
+double _firstBaseline(BuildContext context, TextStyle style) {
+  final painter = TextPainter(
+    text: TextSpan(text: 'H', style: style),
+    textDirection: Directionality.of(context),
+    textScaler: MediaQuery.textScalerOf(context),
+    maxLines: 1,
+  )..layout();
+  final distance = painter.computeDistanceToActualBaseline(
+    TextBaseline.alphabetic,
+  );
+  painter.dispose();
+  return distance;
+}
+
 /// Label / value pair in a two-column grid.
 class Fact extends StatelessWidget {
   const Fact(
@@ -543,29 +562,32 @@ class Fact extends StatelessWidget {
   final Color? color;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 5),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 112,
-          child: Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Eyebrow(label),
+  Widget build(BuildContext context) {
+    final valueStyle = monospace
+        ? mono(context, color: color)
+        : context.text.bodyMedium!.copyWith(color: color);
+    // Eyebrow uses labelSmall, whose 1.2 line height differs from the value's
+    // 1.45/1.5, so the label is pushed down onto the value's baseline.
+    final labelInset =
+        _firstBaseline(context, valueStyle) -
+        _firstBaseline(context, context.text.labelSmall!);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 112,
+            child: Padding(
+              padding: EdgeInsets.only(top: labelInset > 0 ? labelInset : 0),
+              child: Eyebrow(label),
+            ),
           ),
-        ),
-        Expanded(
-          child: SelectableText(
-            value,
-            style: monospace
-                ? mono(context, color: color)
-                : context.text.bodyMedium!.copyWith(color: color),
-          ),
-        ),
-      ],
-    ),
-  );
+          Expanded(child: SelectableText(value, style: valueStyle)),
+        ],
+      ),
+    );
+  }
 }
 
 /// Small square icon button with tooltip.
