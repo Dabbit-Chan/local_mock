@@ -1,7 +1,7 @@
 name: local_mock_client
 description: local_mock web console — inspect app requests and push mock rules.
 publish_to: none
-version: 1.0.0
+version: 2.0.0
 
 environment:
   sdk: '>=3.8.0 <4.0.0'
@@ -9,8 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  local_mock_core: 1.0.0
-  local_mock_transport: 1.0.0
+  local_mock_core: 2.0.0
+  local_mock_transport: 2.0.0
   mime: ^2.0.0
   web: ^1.1.1
   re_editor: ^0.10.0
@@ -18,7 +18,7 @@ dependencies:
   go_router: ^18.1.2
 
 dev_dependencies:
-  local_mock_http: 1.0.0
+  local_mock_http: 2.0.0
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0

@@ -1,6 +1,6 @@
 name: local_mock_core
 description: Native-only app-side mock rules and traffic capture through VM Service and an outbound relay.
-version: 1.0.0
+version: 2.0.0
 homepage: https://github.com/Dabbit-Chan/local_mock
 
 environment:
@@ -8,7 +8,7 @@ environment:
   flutter: '>=3.32.0'
 
 dependencies:
-  local_mock_transport: 1.0.0
+  local_mock_transport: 2.0.0
   vm_service: ^15.0.2
   flutter:
     sdk: flutter
