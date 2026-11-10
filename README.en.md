@@ -115,7 +115,7 @@ flowchart LR
 | Module | Description |
 | --- | --- |
 | 🖥️ [`local_mock_client`](local_mock_client/README.md) | Web console and Dart relay |
-| ⚙️ `local_mock_relay` | Go relay, deployable as a single binary |
+| ⚙️ `local_mock_relay` | Standalone relay-layer implementations |
 | 🧩 [`local_mock_core`](local_mock_package/local_mock_core/README.md) | Rule model and matching, request records, recording; independent of any HTTP client |
 | 🔗 [`local_mock_dio`](local_mock_package/local_mock_dio/README.md) | Dio 4.x / 5.x adapter |
 | 🌐 [`local_mock_http`](local_mock_package/local_mock_http/README.md) | `HttpClient` / `package:http` adapter |

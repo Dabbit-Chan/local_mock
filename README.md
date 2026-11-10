@@ -115,7 +115,7 @@ flowchart LR
 | 模块 | 简介 |
 | --- | --- |
 | 🖥️ [`local_mock_client`](local_mock_client/README.md) | Web 控制台与 Dart Relay |
-| ⚙️ `local_mock_relay` | Go Relay，单二进制部署 |
+| ⚙️ `local_mock_relay` | Relay 层的独立实现 |
 | 🧩 [`local_mock_core`](local_mock_package/local_mock_core/README.md) | 规则模型与匹配、请求记录、录制，不依赖具体 HTTP 客户端 |
 | 🔗 [`local_mock_dio`](local_mock_package/local_mock_dio/README.md) | Dio 4.x / 5.x 适配器 |
 | 🌐 [`local_mock_http`](local_mock_package/local_mock_http/README.md) | `HttpClient` / `package:http` 适配器 |
