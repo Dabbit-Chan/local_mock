@@ -1,6 +1,8 @@
 # local_mock_client
 
-local_mock 的 Web 控制台和 Relay 服务。控制台用 Flutter Web 编写，可以查看设备、实时请求和录制，也可以编辑规则；Relay 是一个独立进程，负责托管控制台页面，并在 App 和控制台之间转发消息。Dart 版 Relay 随控制台一起运行，Go 版见 [`local_mock_relay`](../local_mock_relay/README.md)。
+local_mock 的 Web 控制台和 Relay 服务。控制台用 Flutter Web 编写，可以查看设备、实时请求和录制，也可以编辑规则；Relay 是一个独立进程，负责托管控制台页面，并在 App 和控制台之间转发消息。Dart 版 Relay 随控制台一起运行，Go 版见 `../local_mock_relay/go`。
+
+<a href="README.md">中文</a> · <a href="README.en.md">English</a>
 
 ## 技术原理
 

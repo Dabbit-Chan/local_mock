@@ -2,6 +2,8 @@
 
 App、Relay 和 Web 控制台之间的 WebSocket 通信层，是纯 Dart 实现，不依赖 Flutter。`local_mock_core` 和 Web 控制台都直接使用它；业务 App 不需要直接使用。Go 版 Relay 按同一协议独立实现。
 
+<a href="README.md">中文</a> · <a href="README.en.md">English</a>
+
 ## 技术原理
 
 - **消息模型**：所有消息都是 JSON 文本，分为请求、应答和事件三种。请求带 `id`，可以对应到它的应答，并设有超时。

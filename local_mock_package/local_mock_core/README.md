@@ -2,6 +2,8 @@
 
 local_mock 的核心包，不依赖任何具体的 HTTP 客户端。它负责规则、请求记录和与 Relay 的连接，适配器在它的基础上接入 Dio、`HttpClient` 等客户端。
 
+<a href="README.md">中文</a> · <a href="README.en.md">English</a>
+
 ## 主要内容
 
 - **规则模型**：负责规则的解析、校验和匹配，支持整包替换、字段补丁、参数条件和录制组。

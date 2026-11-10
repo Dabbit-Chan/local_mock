@@ -2,6 +2,8 @@
 
 local_mock 的 Dio 适配器，同一份代码同时支持 Dio 4.x 和 5.x。只在 Debug / Profile 构建中生效，Release 构建中不做任何事。
 
+<a href="README.md">中文</a> · <a href="README.en.md">English</a>
+
 ## 使用示例
 
 ```dart

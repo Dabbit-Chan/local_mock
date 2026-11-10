@@ -2,6 +2,8 @@
 
 local_mock 的 `dart:io` 适配器，覆盖 `package:http`、Dio 默认适配器，以及直接使用 `HttpClient` 的代码和三方库。只在 Debug / Profile 构建中生效，Release 构建和 Web 平台上不做任何事。
 
+<a href="README.md">中文</a> · <a href="README.en.md">English</a>
+
 ## 使用示例
 
 ```dart
