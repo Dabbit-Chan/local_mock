@@ -67,6 +67,15 @@ Future<void> openRequest(WidgetTester tester, String path) async {
   await tester.pumpAndSettle();
 }
 
+/// Query parameters and request headers start collapsed; expand one so its
+/// rows are laid out.
+Future<void> expandSection(WidgetTester tester, String label) async {
+  final expand = find.byTooltip('展开$label');
+  if (expand.evaluate().isEmpty) return;
+  await tester.tap(expand);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('cold start keeps browser rules and requires one manual sync', (
     tester,
@@ -477,6 +486,8 @@ void main() {
       expect(find.text('https://api.test/api/order'), findsOneWidget);
 
       await openRequest(tester, '/api/feed');
+      expect(find.text('Page'), findsNothing);
+      await expandSection(tester, 'Query 参数');
       expect(find.text('Page'), findsOneWidget);
       expect(find.text('2'), findsWidgets);
       expect(find.text('请求体'), findsNothing);
@@ -504,15 +515,28 @@ void main() {
       );
       await openRequest(tester, '/api/order');
 
+      List<ToolButton> actionsOf(int index) => tester
+          .widgetList<ToolButton>(
+            find.descendant(
+              of: find.byKey(Key('detail-pane-$index')),
+              matching: find.byType(ToolButton),
+            ),
+          )
+          .toList();
+
+      // Query parameters and request headers start collapsed; the bodies start
+      // expanded.
+      for (final index in [0, 1]) {
+        expect(actionsOf(index).last.icon, Icons.unfold_more);
+      }
+      for (final index in [2, 3]) {
+        expect(actionsOf(index).last.icon, Icons.unfold_less);
+      }
+
+      await expandSection(tester, 'Query 参数');
+      await expandSection(tester, '请求头');
       for (var index = 0; index < 4; index++) {
-        final actions = tester
-            .widgetList<ToolButton>(
-              find.descendant(
-                of: find.byKey(Key('detail-pane-$index')),
-                matching: find.byType(ToolButton),
-              ),
-            )
-            .toList();
+        final actions = actionsOf(index);
         expect(actions.last.icon, Icons.unfold_less);
         expect(actions[actions.length - 2].icon, Icons.copy_outlined);
       }
@@ -678,6 +702,8 @@ void main() {
       await openRequest(tester, '/api/order');
 
       expect(find.text('请求头'), findsOneWidget);
+      expect(find.text('Authorization'), findsNothing);
+      await expandSection(tester, '请求头');
       expect(find.text('Authorization'), findsOneWidget);
       expect(find.text('Bearer token'), findsOneWidget);
 

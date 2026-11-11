@@ -190,7 +190,7 @@ class _TrafficDetailSections extends StatefulWidget {
 
 class _TrafficDetailSectionsState extends State<_TrafficDetailSections> {
   final _weights = [1.2, 1.2, 2.0, 4.0];
-  final _collapsed = [false, false, false, false];
+  final _collapsed = [true, true, false, false];
   final _overflowScroll = ScrollController();
   final _layoutRevision = ValueNotifier<int>(0);
 
